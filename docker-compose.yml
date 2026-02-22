@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: ./gateway_node
+    ports:
+      - "8000:8000"
+    environment:
+      - SCRAPER_URL=http://scraper:8000
+      - RANKER_URL=http://ranker:8000
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    volumes:
+      - ./gateway_node:/app
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  scraper:
+    build: ./scraper_node
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./scraper_node:/app
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  ranker:
+    build: ./ranker_node
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./ranker_node:/app
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  redis:
+    image: redis:alpine
+    ports:
+      - "6380:6379"
+    

@@ -4,11 +4,15 @@ services:
   gateway:
     build: ./gateway_node
     ports:
-      - "8000:8000"
+      - "${GATEWAY_PORT:-8000}:8000"
+    env_file:
+      - .env
     environment:
-      - SCRAPER_URL=http://scraper:8000
-      - RANKER_URL=http://ranker:8000
-      - REDIS_HOST=redis
+      - SCRAPER_URL=${SCRAPER_URL:-http://scraper:8000}
+      - RANKER_URL=${RANKER_URL:-http://ranker:8000}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     depends_on:
       - redis
     volumes:
@@ -17,19 +21,27 @@ services:
   scraper:
     build: ./scraper_node
     ports:
-      - "8001:8000"
+      - "${SCRAPER_PORT:-8001}:8000"
+    env_file:
+      - .env
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - ./scraper_node:/app
     command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
   ranker:
     build: ./ranker_node
     ports:
-      - "8002:8000"
+      - "${RANKER_PORT:-8002}:8000"
+    env_file:
+      - .env
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - ./ranker_node:/app
     command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
   redis:
     image: redis:alpine
     ports:
-      - "6380:6379"
+      - "${REDIS_LOCAL_PORT:-6380}:6379"
     

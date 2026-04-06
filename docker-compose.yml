@@ -1,47 +1,141 @@
-version: '3.8'
+version: '3.9'
 
 services:
   gateway:
-    build: ./gateway_node
+    build:
+      context: ./gateway_node
+      dockerfile: Dockerfile
+    container_name: gateway
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
-    env_file:
-      - .env
     environment:
       - SCRAPER_URL=${SCRAPER_URL:-http://scraper:8000}
       - RANKER_URL=${RANKER_URL:-http://ranker:8000}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
     depends_on:
-      - redis
-    volumes:
-      - ./gateway_node:/app
-    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+      redis:
+        condition: service_healthy
+      scraper:
+        condition: service_healthy
+      ranker:
+        condition: service_healthy
+    networks:
+      - pfa-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
   scraper:
-    build: ./scraper_node
+    build:
+      context: ./scraper_node
+      dockerfile: Dockerfile
+    container_name: scraper
     ports:
       - "${SCRAPER_PORT:-8001}:8000"
-    env_file:
-      - .env
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-    volumes:
-      - ./scraper_node:/app
-    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    networks:
+      - pfa-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
   ranker:
-    build: ./ranker_node
+    build:
+      context: ./ranker_node
+      dockerfile: Dockerfile
+    container_name: ranker
     ports:
       - "${RANKER_PORT:-8002}:8000"
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - PYTHONUNBUFFERED=1
     env_file:
       - .env
-    environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-    volumes:
-      - ./ranker_node:/app
-    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - pfa-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
+    container_name: redis
     ports:
       - "${REDIS_LOCAL_PORT:-6380}:6379"
-    
+    networks:
+      - pfa-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  pfa-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local

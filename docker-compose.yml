@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 version: '3.9'
 
 services:
@@ -139,3 +140,52 @@ networks:
 volumes:
   redis_data:
     driver: local
+=======
+version: '3.8'
+
+services:
+  gateway:
+    build: ./gateway_node
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - SCRAPER_URL=${SCRAPER_URL:-http://scraper:8000}
+      - RANKER_URL=${RANKER_URL:-http://ranker:8000}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      - redis
+    volumes:
+      - ./gateway_node:/app
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  scraper:
+    build: ./scraper_node
+    ports:
+      - "${SCRAPER_PORT:-8001}:8000"
+    env_file:
+      - .env
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./scraper_node:/app
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  ranker:
+    build: ./ranker_node
+    ports:
+      - "${RANKER_PORT:-8002}:8000"
+    env_file:
+      - .env
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./ranker_node:/app
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  redis:
+    image: redis:alpine
+    ports:
+      - "${REDIS_LOCAL_PORT:-6380}:6379"
+    
+>>>>>>> Stashed changes

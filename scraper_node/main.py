@@ -107,4 +107,3 @@ async def stop_scraping():
 @app.get("/scrape/status")
 async def get_scraping_status():
     return scraping_status
->>>>>>> Stashed changes

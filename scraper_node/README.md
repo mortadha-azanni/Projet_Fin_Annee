@@ -55,5 +55,5 @@ from playwright.async_api import async_playwright
 
 ```bash
 uv sync
-uv run uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8001
 ```

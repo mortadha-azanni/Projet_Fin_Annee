@@ -469,3 +469,53 @@
   color: var(--text3);
   text-align: center;
 }
+
+/* Markdown Prose Styling */
+.markdown-prose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.markdown-prose p {
+  margin: 0;
+}
+.markdown-prose strong {
+  color: #a78bfa;
+}
+.markdown-prose em {
+  color: var(--gold);
+}
+.markdown-prose ul,
+.markdown-prose ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.markdown-prose code {
+  font-family: var(--font-code);
+  background-color: var(--bg2);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.markdown-prose pre {
+  background-color: var(--bg2);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.markdown-prose pre code {
+  background-color: transparent;
+  padding: 0;
+}
+.markdown-prose table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.markdown-prose th,
+.markdown-prose td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+}
+.markdown-prose th {
+  background-color: var(--bg2);
+}

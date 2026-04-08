@@ -7,15 +7,15 @@ from importlib import import_module
 
 AsyncResult = import_module("celery.result").AsyncResult
 
-from Search import perform_search
 from LLM.FLLM import MarkdownDescription
+from celery_app import celery_app
 
 app = FastAPI(title="Ranker Node")
 
 # Allow all CORS for testing
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,7 +40,7 @@ async def health():
 @app.post("/search")
 async def search(query_data: SearchQuery):
     """Trigger an async search task and return its task ID"""
-    task = perform_search.delay(query_data.query)
+    task = celery_app.send_task("Search.perform_search", args=[query_data.query])
     return {"task_id": task.id, "message": "Search task started"}
 
 @app.websocket("/ws/status/{task_id}")

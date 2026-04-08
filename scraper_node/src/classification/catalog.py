@@ -1,0 +1,55 @@
+"""Canonical shared classification definitions."""
+
+from __future__ import annotations
+
+CLASSIFICATION_CATALOG: dict[str, dict[str, str]] = {
+    "computing.laptops.general": {"level_1": "computing", "level_2": "laptops", "level_3": "general"},
+    "computing.laptops.gaming": {"level_1": "computing", "level_2": "laptops", "level_3": "gaming"},
+    "computing.laptops.business": {"level_1": "computing", "level_2": "laptops", "level_3": "business"},
+    "computing.desktops.general": {"level_1": "computing", "level_2": "desktops", "level_3": "general"},
+    "computing.desktops.gaming": {"level_1": "computing", "level_2": "desktops", "level_3": "gaming"},
+    "computing.desktops.all_in_one": {"level_1": "computing", "level_2": "desktops", "level_3": "all_in_one"},
+    "computing.components.storage": {"level_1": "computing", "level_2": "components", "level_3": "storage"},
+    "computing.components.processing": {"level_1": "computing", "level_2": "components", "level_3": "processing"},
+    "computing.components.graphics": {"level_1": "computing", "level_2": "components", "level_3": "graphics"},
+    "computing.components.memory": {"level_1": "computing", "level_2": "components", "level_3": "memory"},
+    "computing.components.other": {"level_1": "computing", "level_2": "components", "level_3": "other"},
+    "computing.peripherals.input": {"level_1": "computing", "level_2": "peripherals", "level_3": "input"},
+    "computing.peripherals.display": {"level_1": "computing", "level_2": "peripherals", "level_3": "display"},
+    "computing.peripherals.audio_video": {"level_1": "computing", "level_2": "peripherals", "level_3": "audio_video"},
+    "computing.peripherals.power_connectivity": {"level_1": "computing", "level_2": "peripherals", "level_3": "power_connectivity"},
+    "computing.tablets.general": {"level_1": "computing", "level_2": "tablets", "level_3": "general"},
+    "software.productivity.general": {"level_1": "software", "level_2": "productivity", "level_3": "general"},
+    "software.security.general": {"level_1": "software", "level_2": "security", "level_3": "general"},
+    "phones.devices.general": {"level_1": "phones", "level_2": "devices", "level_3": "general"},
+    "phones.accessories.general": {"level_1": "phones", "level_2": "accessories", "level_3": "general"},
+    "wearables.smart.general": {"level_1": "wearables", "level_2": "smart", "level_3": "general"},
+    "gaming.consoles.general": {"level_1": "gaming", "level_2": "consoles", "level_3": "general"},
+    "gaming.accessories.general": {"level_1": "gaming", "level_2": "accessories", "level_3": "general"},
+    "tv_display.television.general": {"level_1": "tv_display", "level_2": "television", "level_3": "general"},
+    "tv_display.projectors.general": {"level_1": "tv_display", "level_2": "projectors", "level_3": "general"},
+    "tv_display.accessories.general": {"level_1": "tv_display", "level_2": "accessories", "level_3": "general"},
+    "audio.home.general": {"level_1": "audio", "level_2": "home", "level_3": "general"},
+    "audio.portable.general": {"level_1": "audio", "level_2": "portable", "level_3": "general"},
+    "photo_video.cameras.general": {"level_1": "photo_video", "level_2": "cameras", "level_3": "general"},
+    "networking.infrastructure.general": {"level_1": "networking", "level_2": "infrastructure", "level_3": "general"},
+    "networking.security.general": {"level_1": "networking", "level_2": "security", "level_3": "general"},
+    "printing.printers.general": {"level_1": "printing", "level_2": "printers", "level_3": "general"},
+    "printing.consumables.general": {"level_1": "printing", "level_2": "consumables", "level_3": "general"},
+    "office.supplies.general": {"level_1": "office", "level_2": "supplies", "level_3": "general"},
+    "appliances.kitchen.general": {"level_1": "appliances", "level_2": "kitchen", "level_3": "general"},
+    "appliances.laundry.general": {"level_1": "appliances", "level_2": "laundry", "level_3": "general"},
+    "appliances.climate.general": {"level_1": "appliances", "level_2": "climate", "level_3": "general"},
+    "appliances.homecare.general": {"level_1": "appliances", "level_2": "homecare", "level_3": "general"},
+    "home_living.furniture_decor.general": {"level_1": "home_living", "level_2": "furniture_decor", "level_3": "general"},
+    "beauty_health.personalcare.general": {"level_1": "beauty_health", "level_2": "personalcare", "level_3": "general"},
+    "sports_outdoor.general.general": {"level_1": "sports_outdoor", "level_2": "general", "level_3": "general"},
+    "toys_games.general.general": {"level_1": "toys_games", "level_2": "general", "level_3": "general"},
+    "baby.parenting.general": {"level_1": "baby", "level_2": "parenting", "level_3": "general"},
+    "books_magazines.general.general": {"level_1": "books_magazines", "level_2": "general", "level_3": "general"},
+    "unknown.unknown.unknown": {"level_1": "unknown", "level_2": "unknown", "level_3": "unknown"},
+}
+
+
+def getClassificationRow(classificationId: str) -> dict[str, str]:
+    return CLASSIFICATION_CATALOG.get(classificationId, CLASSIFICATION_CATALOG["unknown.unknown.unknown"])

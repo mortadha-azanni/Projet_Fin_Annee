@@ -1,9 +1,15 @@
 from gliner import GLiNER  # type: ignore
 
+# Load model ONCE globally to prevent OOM errors and huge overhead per task
+_GLINER_MODEL = None
+
 class EntityExtractor:
     def __init__(self):
-        # Load model once (using a smaller model to avoid a 1.5GB download)
-        self.model = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+        global _GLINER_MODEL
+        if _GLINER_MODEL is None:
+            # Load model once
+            _GLINER_MODEL = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+        self.model = _GLINER_MODEL
 
         # Define YOUR schema (this is the power of GLiNER)
         self.labels = [

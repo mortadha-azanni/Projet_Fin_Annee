@@ -1,6 +1,15 @@
-# React + Vite
+## React + Vite Frontend Setup
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules. 
+The application runs as the frontend UI (typically on Vite's default port, such as 5173).
+
+## Environment Variables (.env)
+
+You need to set up the necessary `.env` variables for the frontend to connect to the backend services. Create a `.env` file in the root of `my-react-app` based on your API URLs:
+
+```
+VITE_API_BASE_URL=http://localhost:8000 # Example pointing to Gateway Node
+```
 
 Currently, two official plugins are available:
 

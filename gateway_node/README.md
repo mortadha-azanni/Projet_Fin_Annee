@@ -38,7 +38,7 @@ curl "http://localhost:8000/scrape-and-rank?url=https://example.com"
 
 - `SCRAPER_URL` - Scraper service URL (default: `http://localhost:8001`)
 - `RANKER_URL` - Ranker service URL (default: `http://localhost:8002`)
-- `REDIS_HOST` - Redis host (default: `localhost`)
+- `REDIS_HOST` - Redis host (default: `localhost`, Redis usually runs with a 6380 mapping to 6379 in Docker)
 
 ## Dependencies
 

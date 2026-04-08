@@ -1,4 +1,6 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import ProductCard from './ProductCard';
 
 export default function Message({ message }) {
@@ -8,7 +10,15 @@ export default function Message({ message }) {
     <div className={`message ${isUser ? 'user' : 'ai'}`}>
       <div className="message-content">
         <div className="bubble">
-          {message.content}
+          {isUser ? (
+            message.content
+          ) : (
+            <div className="markdown-prose">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          )}
           {!isUser && message.streaming && <span className="cursor">▍</span>}
         </div>
         

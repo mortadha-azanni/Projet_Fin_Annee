@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { SUGGESTION_CHIPS } from '../constants/mockData';
 
 export default function ChatInput({ onSendMessage, disabled }) {
   const [input, setInput] = useState('');
+  const textareaRef = useRef(null);
 
   const handleSend = () => {
     if (disabled || !input.trim()) return;
@@ -19,7 +20,10 @@ export default function ChatInput({ onSendMessage, disabled }) {
 
   const handleChipClick = (suggestion) => {
     if (disabled) return;
-    onSendMessage(suggestion);
+    setInput(suggestion);
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 0);
   };
 
   return (
@@ -41,6 +45,7 @@ export default function ChatInput({ onSendMessage, disabled }) {
 
       <div className={`input-box ${disabled ? 'disabled' : ''}`}>
         <textarea 
+          ref={textareaRef}
           placeholder="Type a message..." 
           value={input}
           onChange={(e) => setInput(e.target.value)}

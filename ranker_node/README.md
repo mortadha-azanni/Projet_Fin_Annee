@@ -63,5 +63,10 @@ Rank a list of items
 
 ```bash
 uv sync
-uv run uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8002
 ```
+
+## Celery Worker
+
+The ranker service uses a Celery worker to run NLP tasks asynchronously. The `celery_worker` container is responsible for executing heavy background ML and computation tasks. Ensure the Redis messaging broker (often mapped to 6380 -> 6379) is running.
+

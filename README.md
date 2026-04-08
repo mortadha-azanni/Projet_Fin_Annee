@@ -1,206 +1,107 @@
-# PFA - Microservices Architecture
-**Projet Fin d'Année**
+# PFA (Projet Fin d'Année) - Automated E-commerce Search & Ranking System
 
-A distributed microservices system built with FastAPI and Docker Compose, featuring web scraping, data ranking, and an API gateway.
+A distributed microservices system built with **FastAPI**, **Celery**, **Redis**, **pgvector**, and **React/Vite**. This application features an intelligent Semantic Search and NLP pipeline that scrapes e-commerce data and uses Large Language Models and Hybrid Search (BM25 + Cosine Distance) to return the best product recommendations ranked by relevance and price.
 
 ## 🏗️ Architecture
 
-```
+```text
 ┌─────────────┐
-│   Client    │
+│   Client    │ (React / Vite)
 └──────┬──────┘
-       │
+       │ WebSocket & REST
        ▼
 ┌─────────────┐      ┌─────────────┐
 │   Gateway   │◄────►│    Redis    │
-│   :8000     │      │   :6380     │
+│   :8000     │      │   :6379     │
 └──────┬──────┘      └─────────────┘
-       │
-       ├──────────────┬──────────────┐
-       ▼              ▼              ▼
-┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-│  Scraper    │ │   Ranker    │ │   ...       │
-│   :8001     │ │   :8002     │ │             │
-└─────────────┘ └─────────────┘ └─────────────┘
+       │                    ▲
+       ├──────────────┬─────┴────────────┐
+       ▼              ▼                  ▼
+┌─────────────┐ ┌─────────────┐    ┌─────────────┐
+│  Scraper    │ │   Ranker    │    │ Celery NLP  │ 
+│   :8001     │ │   :8002     │    │ Worker      │
+└─────────────┘ └─────────────┘    └─────────────┘
 ```
 
-### Services
+### Services Included
+- **Frontend Client** - React/Vite Application (`my-react-app`) listening on port `5173`. Includes a Chat Interface and an ETL Admin Dashboard.
+- **Gateway Node** (`:8000`) - API Gateway orchestrating REST & WebSocket traffic to downstream microservices.
+- **Scraper Node** (`:8001`) - Web scraping routines using Celery to harvest e-commerce hardware data.
+- **Ranker Node** (`:8002`) - Semantic and Keyword search using `SentenceTransformers`, `GLiNER` NER extraction, and `Google Gemini`.
+- **Celery Worker(s)** - Handles asynchronous NLP & Scraping Tasks to prevent API timeouts.
+- **Redis** (`:6380` locally, `:6379` internally) - Message broker for Celery and state caching layer.
 
-- **Gateway Node** (`:8000`) - API Gateway that orchestrates requests between services
-- **Scraper Node** (`:8001`) - Web scraping service for data extraction
-- **Ranker Node** (`:8002`) - Ranking and scoring service for scraped data
-- **Redis** (`:6380`) - Caching layer for improved performance
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
+- **Docker** & **Docker Compose**
+- **Node.js** & **npm** (for the frontend)
+- At least **4GB to 8GB of RAM allocated to Docker** (Crucial: Ranker loads PyTorch NLP models!).
 
-- Docker & Docker Compose
-- Python 3.10+ (for local development)
+### 1. Backend Setup
 
-> **📘 New to Docker?** Check out our [Docker Guide for Beginners](DOCKER_GUIDE.md) - a complete step-by-step guide for team members!
+1. Copy the environment variables template and configure your API keys:
+   ```bash
+   cp .env.example .env
+   ```
+2. Open `.env` and add your **`GEMINI_API_KEY`**.
+3. Spin up the backend microservices using Docker Compose:
+   ```bash
+   docker compose build
+   docker compose up -d
+   ```
+4. Verify all containers are running smoothly without restarting:
+   ```bash
+   docker compose logs -f
+   ```
 
-### Running the Project
+### 2. Frontend Setup
 
+1. Open a new terminal and navigate to the React app:
+   ```bash
+   cd my-react-app
+   ```
+2. Install the necessary Node modules:
+   ```bash
+   npm install
+   ```
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
+
+---
+
+## 🖥️ Accessing the Application
+
+Once everything is booted, you can access the different interfaces:
+
+- **💬 Chat Interface (Main App):** [http://localhost:5173/chat](http://localhost:5173/chat)
+- **⚙️ ETL Admin Dashboard:** [http://localhost:5173/admin](http://localhost:5173/admin)
+- **🚪 Gateway API Docs (Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+---
+
+## 🔧 Managing and Developing
+
+### Stopping the Services
+To stop the backend microservices, run:
 ```bash
-# Copy environment variables template
-cp .env.example .env
-
-# Edit .env and add your API keys (especially GEMINI_API_KEY)
-nano .env  # or use your preferred editor
-
-# Start all services
-docker-compose up --build
-
-# Or run in detached mode
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop all services
-docker-compose down
-
-# Stop and remove volumes
-docker-compose down -v
+docker compose down
 ```
-
-### Accessing Services
-
-- Gateway API: http://localhost:8000
-- Gateway Docs: http://localhost:8000/docs
-- Scraper API: http://localhost:8001
-- Scraper Docs: http://localhost:8001/docs
-- Ranker API: http://localhost:8002
-- Ranker Docs: http://localhost:8002/docs
-- Redis: localhost:6380
-
-## 📡 API Endpoints
-
-### Gateway (`/`)
-
-- `GET /` - Service information
-- `GET /health` - Health check
-- `GET /services/health` - Check all services health
-- `GET /scrape-and-rank?url={url}` - Complete workflow: scrape and rank
-
-### Scraper (`/`)
-
-- `GET /` - Service information
-- `GET /health` - Health check
-- `GET /scrape?url={url}` - Scrape data from URL
-
-### Ranker (`/`)
-
-- `GET /` - Service information
-- `GET /health` - Health check
-- `POST /rank` - Rank list of items
-
-## 🛠️ Development
-
-### Project Structure
-
-```
-PFA/
-├── docker-compose.yml          # Docker orchestration
-├── README.md                   # This file
-├── .gitignore                  # Git ignore patterns
-├── gateway_node/
-│   ├── Dockerfile
-│   ├── main.py                 # Gateway service
-│   ├── pyproject.toml          # Dependencies
-│   └── uv.lock
-├── scraper_node/
-│   ├── Dockerfile
-│   ├── main.py                 # Scraper service
-│   ├── pyproject.toml
-│   └── uv.lock
-└── ranker_node/
-    ├── Dockerfile
-    ├── main.py                 # Ranker service
-    ├── pyproject.toml
-    └── uv.lock
-```
-
-### Local Development
-
-Each service can be run independently:
-
+To wipe data (including the Redis cache), run:
 ```bash
-cd gateway_node
-uv sync
-uv run uvicorn main:app --reload --port 8000
+docker compose down -v
 ```
 
-### Adding Dependencies
-
-```bash
-cd <service_folder>
-# Edit pyproject.toml, then:
-uv lock
-```
-
-## 🧪 Testing
-
-```bash
-# Test gateway health
-curl http://localhost:8000/health
-
-# Test all services
-curl http://localhost:8000/services/health
-
-# Test scrape and rank workflow
-curl "http://localhost:8000/scrape-and-rank?url=https://example.com"
-```
-
-## 🔧 Environment Variables
-
-All environment variables are documented in [.env.example](.env.example). Copy it to `.env` and configure:
-
-```bash
-cp .env.example .env
-```
-
-### Key Variables:
-
-**Gateway Node:**
-- `SCRAPER_URL` - Scraper service URL (default: `http://scraper:8000`)
-- `RANKER_URL` - Ranker service URL (default: `http://ranker:8000`)
-- `REDIS_HOST` - Redis host (default: `redis`)
-
-**API Keys:**
-- `GEMINI_API_KEY` - Google Gemini API key (required for AI features)
-  - Get your key: https://makersuite.google.com/app/apikey
-- `OPENAI_API_KEY` - OpenAI API key (optional, alternative)
-
-**See [.env.example](.env.example) for complete configuration options.**
-
-## 📝 TODO
-
-- [ ] Implement actual scraping logic (BeautifulSoup/Playwright)
-- [ ] Implement ranking algorithms
-- [ ] Add Redis caching to gateway
-- [ ] Add authentication/authorization
-- [ ] Add rate limiting
-- [ ] Add comprehensive logging
-- [ ] Add unit and integration tests
-- [ ] Add CI/CD pipeline
-- [ ] Add monitoring and observability
-- [ ] Add API rate limiting per service
-- [ ] Document API schemas with Pydantic models
+### Important Notes on NLP Memory
+The Ranker's `celery_worker` container dynamically loads models like **all-MiniLM-L6-v2** (SentenceTransformers) and **GLiNER**. 
+If you see the `celery_worker` exiting with `Signal 9 (SIGKILL)`, it means Docker ran out of memory. 
+Ensure Docker Desktop or your Docker Engine is configured with adequate RAM.
 
 ## 🤝 Contributing
-
 1. Create a feature branch
-2. Make your changes
-3. Test thoroughly
-4. Submit a pull request
-
-## 📄 License
-
-[Add your license here]
-
-## 👥 Authors
-
-[Add your name and teammates]
-
+2. Make your changes and test locally
+3. Submit a pull request

@@ -138,9 +138,43 @@ def perform_search(self, user_query_str: str):
         print(f"    [ERROR] Failed to fetch products for selected category {selected_category_id}: {exc}")
         return {"error": f"Database fetch error: {exc}"}
 
+    if not product_docs and (price_min is not None or price_max is not None):
+        print(f"\n[Fallback] No products found with price range {price_min}-{price_max}. Retrying without price constraints...")
+        price_min, price_max = None, None
+        try:
+            product_docs = getProductByCategory(
+                selected_category_id,
+                price_min=price_min,
+                price_max=price_max,
+                query_embedding=query_embedding,
+                limit=200
+            )
+        except Exception as exc:
+            print(f"    [ERROR] Failed to fetch products for selected category {selected_category_id} during fallback: {exc}")
+
     if not product_docs:
-        print(f"\nNo products found in the selected category with price range {price_min}-{price_max}")
-        return {"results": [], "message": "No products met constraints"}
+        print(f"\n[Fallback] Still no products found in category {selected_category_id}. Trying other top semantic categories...")
+        price_min, price_max = None, None
+        for cat_res in top_category_paths_results:
+            fallback_cat_id = cat_res["document"]["category_id"]
+            if fallback_cat_id != selected_category_id:
+                try:
+                    product_docs = getProductByCategory(
+                        fallback_cat_id,
+                        price_min=None,
+                        price_max=None,
+                        query_embedding=query_embedding,
+                        limit=200
+                    )
+                    if product_docs:
+                        print(f"    [Fallback Success] Found {len(product_docs)} products in fallback category {fallback_cat_id}")
+                        break
+                except Exception as exc:
+                    pass
+
+    if not product_docs:
+        print(f"\n[Final Failure] No products found in any related category.")
+        return {"results": [], "message": "No products found for the given criteria."}
 
     print(f"\n[Products Found] {len(product_docs)} total top pgvector products retrieved")
 

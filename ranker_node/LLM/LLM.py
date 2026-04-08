@@ -1,7 +1,7 @@
 import json
+from importlib import import_module
 from typing import Optional, Dict, List
 
-from google import genai
 from dotenv import load_dotenv
 import os
 
@@ -22,7 +22,8 @@ class GeminiResponseSchema(BaseModel):
     price: PriceConstraints
     selected_category_id: Optional[int] = Field(None, description="The strictly chosen category ID")
 
-client = genai.Client(api_key=API_KEY)
+genai = import_module("google.genai")
+client = genai.Client(api_key=API_KEY) if API_KEY else None
 default_prompt = """You are an expert e-commerce search expansion AI. Your task is to bridge the gap between a user's natural language search query and our technical product database. 
 
 You will be provided with the user's original query, extracted entities (brands/specs), extracted price constraints, and technical dictionary snippets for the top 3 most relevant product categories.
@@ -71,7 +72,10 @@ def query_gemini(user_query: str, ner_entities: List[str], category_dictionaries
 
     try:
         import time
-        from google.genai.types import GenerateContentConfig
+        GenerateContentConfig = import_module("google.genai.types").GenerateContentConfig
+
+        if not client:
+            raise ValueError("Gemini API client is not configured")
         
         max_retries = 4
         retry_delay = 2

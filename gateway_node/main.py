@@ -59,7 +59,7 @@ async def check_services_health():
 
 
 @app.get("/scrape-and-rank")
-async def scrape_and_rank(url: str):
+async def ETL(url: str):
     """
     Complete workflow: scrape URL and rank results
     
@@ -92,7 +92,8 @@ async def scrape_and_rank(url: str):
                     "success": True,
                     "url": url,
                     "scraped_items": len(scrape_data.get("data", [])),
-                    "ranked_results": rank_data.get("ranked_items", [])
+                    "ranked_results": rank_data.get("ranked_items", []),
+                    "final_response": rank_data.get("final_response", "")
                 }
             else:
                 return {
@@ -100,6 +101,7 @@ async def scrape_and_rank(url: str):
                     "url": url,
                     "scraped_items": 0,
                     "ranked_results": [],
+                    "final_response": "",
                     "message": "No data scraped from URL"
                 }
                 
@@ -118,3 +120,4 @@ async def scrape_and_rank(url: str):
             status_code=500,
             detail=f"Internal error: {str(e)}"
         )
+

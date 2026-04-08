@@ -8,14 +8,41 @@ from Hybrid.fusion import reciprocal_rank_fusion
 from NER.entity_extractor import EntityExtractor
 from NER.utils import normalize
 from LLM.LLM import query_gemini
+from LLM.FLLM import MarkdownDescription
+from celery_app import celery_app
 
-def perform_search(user_query_str: str):
+
+def _strip_embedding(document: dict) -> dict:
+    if not isinstance(document, dict):
+        return document
+    return {key: value for key, value in document.items() if key != "embedding"}
+
+
+def _sanitize_ranked_results(results: list[dict]) -> list[dict]:
+    sanitized = []
+    for item in results:
+        if not isinstance(item, dict):
+            sanitized.append(item)
+            continue
+        new_item = dict(item)
+        new_item["document"] = _strip_embedding(item.get("document", {}))
+        sanitized.append(new_item)
+    return sanitized
+
+@celery_app.task(bind=True)
+def perform_search(self, user_query_str: str):
     # ============================================================================
     # Query Normalization & Expansion
     # ============================================================================
+    if self:
+        self.update_state(state='PROGRESS', meta={'status': 'Normalizing query and extracting entities...'})
+    
     extractor = EntityExtractor()
     normalized_query = extractor.extract(user_query_str)
     
+    if self:
+        self.update_state(state='PROGRESS', meta={'status': 'Fetching and ranking categories...'})
+
     # ============================================================================
     # MAIN SEARCH LOGIC
     # ============================================================================
@@ -60,6 +87,9 @@ def perform_search(user_query_str: str):
     ]
 
     print("\n[LLM] Querying Gemini to parse prices and select the strongest category...")
+    if self:
+        self.update_state(state='PROGRESS', meta={'status': 'Consulting LLM for category and price selection...'})
+    
     llm_results = query_gemini(
         user_query=user_query_str,
         ner_entities=ner_entities,
@@ -90,6 +120,9 @@ def perform_search(user_query_str: str):
     from SementicSearch.utils import embed
     from SementicSearch.SementicEngine import MODEL, DIMS
     query_embedding = embed(semantic_search_query, MODEL, DIMS)
+
+    if self:
+        self.update_state(state='PROGRESS', meta={'status': f'Fetching top products efficiently for category {selected_category_id}...'})
 
     # Stage 2.5: Fetch products pushed entirely to PGVector using Cosine Distance (`<=>`)
     print(f"\n[Fetching Products] Fetching top products efficiently strictly using pgvector for Category ID: {selected_category_id}")
@@ -130,6 +163,9 @@ def perform_search(user_query_str: str):
     print("\nBM25 Product Search Results (Re-ranked over pgvector subset):")
     bm25_results = product_bm25.search(bm25_search_query, top_k=200)
 
+    if self:
+        self.update_state(state='PROGRESS', meta={'status': 'Applying Reciprocal Rank Fusion (RRF) for final ranking...'})
+
     # Stage 4: Fusion using RRF
     print("\n[Hybrid Search] Applying Reciprocal Rank Fusion (RRF)...")
     rrf_results = reciprocal_rank_fusion(
@@ -144,7 +180,42 @@ def perform_search(user_query_str: str):
         price = doc.get('price', 'N/A')
         print(f"  {i}. [RRF: {result['rrf_score']:.6f}] [BM25: {result['bm25_score']:.4f}] [Semantic Rank: {result['semantic_score']:.4f}] {doc['description'][:45]}... | Price: ${price}")
 
-    return {"results": rrf_results}
+    # ============================================================================
+    # Caching Phase: Store Top 20, Return Top 5
+    # ============================================================================
+    if self:
+        self.update_state(state='PROGRESS', meta={'status': 'Caching top 20 results and finalizing...'})
+
+    top_20 = _sanitize_ranked_results(rrf_results[:20])
+    top_5 = _sanitize_ranked_results(rrf_results[:5])
+    top_5_documents = [result["document"] for result in top_5]
+
+    final_response = MarkdownDescription(top_5_documents).generate() if top_5_documents else ""
+
+    try:
+        import redis
+        import json
+        import os
+        
+        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        # Using db=1 to keep cache separate from Celery broker (db=0)
+        r = redis.Redis(host=redis_host, port=redis_port, db=1) 
+        
+        task_id = self.request.id if self and hasattr(self, 'request') and self.request.id else "local_test"
+        cache_key = f"search_results:{task_id}"
+        
+        # Serialize with default=str to handle UUIDs, Decimals, or Datetimes effortlessly
+        r.setex(cache_key, 3600, json.dumps(top_20, default=str)) 
+        print(f"\n[Cache] Stored top 20 results in Redis under key: {cache_key}")
+    except Exception as e:
+        print(f"\n[Cache Error] Failed to store results in Redis: {e}")
+
+    return {
+        "results": top_5,
+        "final_response": final_response,
+        "cache_key": f"search_results:{task_id}" if 'task_id' in locals() else None,
+    }
 
 if __name__ == '__main__':
     user_q = normalize("i want a good machine for playing under 3000dt")

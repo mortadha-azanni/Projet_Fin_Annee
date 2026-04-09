@@ -16,7 +16,7 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PYTHONUNBUFFERED=1
-      - UV_LINK_MODE=copy
+      - UV_LINK_MODE=hardlink
     env_file:
       - .env
     depends_on:
@@ -45,7 +45,7 @@ services:
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - PYTHONUNBUFFERED=1
-      - UV_LINK_MODE=copy
+      - UV_LINK_MODE=hardlink
     env_file:
       - .env
     depends_on:
@@ -71,7 +71,7 @@ services:
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - PYTHONUNBUFFERED=1
-      - UV_LINK_MODE=copy
+      - UV_LINK_MODE=hardlink
     env_file:
       - .env
     depends_on:
@@ -80,10 +80,10 @@ services:
     networks:
       - pfa-network
     volumes:
-      - scraper_venv:/app/.venv
+      - scraper_worker_venv:/app/.venv
       - uv_cache:/root/.cache/uv
       - python_cache:/root/.local/share/uv/python
-    command: ["uv", "run", "celery", "-A", "celery_app", "worker", "--loglevel=info"]
+    command: ["uv", "run", "celery", "-A", "celery_app", "worker", "--loglevel=info", "--purge"]
 
   ranker:
     build:
@@ -100,7 +100,7 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PYTHONUNBUFFERED=1
-      - UV_LINK_MODE=copy
+      - UV_LINK_MODE=hardlink
     env_file:
       - .env
     depends_on:
@@ -128,7 +128,7 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PYTHONUNBUFFERED=1
-      - UV_LINK_MODE=copy
+      - UV_LINK_MODE=hardlink
     env_file:
       - .env
     depends_on:
@@ -137,7 +137,7 @@ services:
     networks:
       - pfa-network
     volumes:
-      - ranker_venv:/app/.venv
+      - celery_worker_venv:/app/.venv
       - huggingface_cache:/root/.cache/huggingface
       - uv_cache:/root/.cache/uv
       - python_cache:/root/.local/share/uv/python
@@ -174,6 +174,10 @@ volumes:
   scraper_venv:
     driver: local
   ranker_venv:
+    driver: local
+  scraper_worker_venv:
+    driver: local
+  celery_worker_venv:
     driver: local
   uv_cache:
     driver: local

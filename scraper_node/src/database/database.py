@@ -14,6 +14,19 @@ from .session import getSession
 _EMBEDDING_MODEL: SentenceTransformer | None = None
 
 
+def clearProductsTable(logger: logging.Logger | None = None) -> int:
+	"""Delete all existing products to support full refresh scrape runs."""
+
+	active_logger = logger or logging.getLogger(__name__)
+
+	with getSession() as session:
+		deleted_count = session.query(Product).delete(synchronize_session=False)
+		session.commit()
+
+	active_logger.info("Cleared %s existing products before refresh insert", deleted_count)
+	return deleted_count
+
+
 def _getEmbeddingModel() -> SentenceTransformer:
 	global _EMBEDDING_MODEL
 	if _EMBEDDING_MODEL is None:

@@ -34,6 +34,7 @@ export default function AdminPage() {
             <div className="card stats">
               <h3>Pipeline Stats</h3>
               <div className="stat-item">Products Scraped: {stats.productsScraped}</div>
+              <div className="stat-item">Products in Supabase: {stats.productsInDb}</div>
               <div className="stat-item">Redis Cache Hits: {stats.redisCacheHits}</div>
             </div>
           </div>

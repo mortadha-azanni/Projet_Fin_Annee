@@ -10,10 +10,23 @@ export function useETL() {
   ]);
   const [stats, setStats] = useState({
     productsScraped: 0,
+    productsInDb: 0,
     redisCacheHits: 0
   });
 
   const ws = useRef(null);
+
+  const applyServerPayload = useCallback((data) => {
+    const serverState = String(data?.state || 'idle').toLowerCase();
+    setStatus(serverState.charAt(0).toUpperCase() + serverState.slice(1));
+
+    if (typeof data?.urls_scraped === 'number' && Number.isFinite(data.urls_scraped)) {
+      setStats(prev => ({
+        ...prev,
+        productsScraped: Math.max(0, data.urls_scraped)
+      }));
+    }
+  }, []);
 
   const addLog = (type, message) => {
     setLogs(prev => [...prev, {
@@ -24,8 +37,40 @@ export function useETL() {
     }]);
   };
 
-  // Setup WebSocket connection
+  const loadDbCount = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/scrape/db-count`);
+      const data = await res.json();
+      if (typeof data?.products_in_db === 'number' && Number.isFinite(data.products_in_db)) {
+        setStats(prev => ({
+          ...prev,
+          productsInDb: Math.max(0, data.products_in_db)
+        }));
+      }
+    } catch {
+      // Keep current value if count fetch fails.
+    }
+  }, []);
+
+  // Setup initial status + WebSocket connection
   useEffect(() => {
+    let cancelled = false;
+
+    const loadInitialStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/scrape/status`);
+        const data = await res.json();
+        if (!cancelled) {
+          applyServerPayload(data);
+          await loadDbCount();
+        }
+      } catch (err) {
+        addLog('warning', 'Failed to load initial pipeline status.');
+      }
+    };
+
+    loadInitialStatus();
+
     ws.current = new WebSocket(WS_BASE);
 
     ws.current.onopen = () => {
@@ -35,22 +80,16 @@ export function useETL() {
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
-        // Update Local State from Backend Model
-        const serverState = data.state || 'idle';
-        // Map backend state strings to frontend labels (running -> Running)
-        setStatus(serverState.charAt(0).toUpperCase() + serverState.slice(1));
+        applyServerPayload(data);
+        const serverState = String(data?.state || 'idle').toLowerCase();
         
         if (data.message) {
           const logType = serverState === 'error' ? 'error' : 'info';
           addLog(logType, data.message);
         }
 
-        if (data.urls_scraped !== undefined) {
-          setStats(prev => ({
-            ...prev,
-            productsScraped: data.urls_scraped
-          }));
+        if (serverState === 'completed' || serverState === 'idle') {
+          loadDbCount();
         }
       } catch (err) {
         console.error("Failed to parse websocket message", err);
@@ -66,11 +105,12 @@ export function useETL() {
     };
 
     return () => {
+      cancelled = true;
       if (ws.current) {
         ws.current.close();
       }
     };
-  }, []);
+  }, [applyServerPayload, loadDbCount]);
 
   const handleStart = useCallback(async () => {
     addLog('info', 'Sending Launch command...');
@@ -78,10 +118,11 @@ export function useETL() {
       const res = await fetch(`${API_BASE}/scrape/launch`, { method: 'POST' });
       const data = await res.json();
       if (data.state === 'error') addLog('error', data.message);
+      await loadDbCount();
     } catch (err) {
       addLog('error', `Failed to start: ${err.message}`);
     }
-  }, []);
+  }, [loadDbCount]);
 
   const handlePause = useCallback(async () => {
     addLog('info', 'Sending Pause command...');
@@ -111,10 +152,11 @@ export function useETL() {
       const res = await fetch(`${API_BASE}/scrape/stop`, { method: 'POST' });
       const data = await res.json();
       if (data.state === 'error') addLog('error', data.message);
+      await loadDbCount();
     } catch (err) {
       addLog('error', `Failed to stop: ${err.message}`);
     }
-  }, []);
+  }, [loadDbCount]);
 
   const handleClearLogs = useCallback(() => {
     setLogs([]);

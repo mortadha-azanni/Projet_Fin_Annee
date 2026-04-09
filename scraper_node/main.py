@@ -1,17 +1,28 @@
 import os
 import json
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from enum import Enum
 from scraper import runScrapers
 import redis.asyncio as redis  #type: ignore
+from src.database.session import getProductsCount
 
 # Redis Configuration
 redis_host = os.getenv("REDIS_HOST", "localhost")
 redis_port = os.getenv("REDIS_PORT", "6379")
 redis_url = f"redis://{redis_host}:{redis_port}/0"
+logger = logging.getLogger(__name__)
+
+
+def apply_server_state(data: dict) -> None:
+    scraping_status.update({
+        "state": data.get("state", scraping_status["state"]),
+        "message": data.get("message", scraping_status["message"]),
+        "urls_scraped": data.get("urls_scraped", scraping_status["urls_scraped"]),
+    })
 
 async def redis_listener():
     """Background task to listen for progress updates from Celery via Redis Pub/Sub"""
@@ -23,11 +34,7 @@ async def redis_listener():
             if message["type"] == "message":
                 data = json.loads(message["data"])
                 # Update local global state
-                scraping_status.update({
-                    "state": data.get("state", scraping_status["state"]),
-                    "message": data.get("message", scraping_status["message"]),
-                    "urls_scraped": data.get("urls_scraped", scraping_status["urls_scraped"]),
-                })
+                apply_server_state(data)
                 # Broadcast to connected WS clients
                 await broadcast_progress(scraping_status)
     except asyncio.CancelledError:
@@ -37,6 +44,15 @@ async def redis_listener():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Always boot in idle state; scraping must be started explicitly by /scrape/launch.
+    await r_client.set("scraper_control_state", ScrapingState.IDLE.value)
+    await r_client.delete("current_scraper_task_id")
+    apply_server_state({
+        "state": ScrapingState.IDLE.value,
+        "message": "Scraping is idle",
+        "urls_scraped": 0,
+    })
+
     # Start Redis listener background task
     listener_task = asyncio.create_task(redis_listener())
     yield
@@ -87,8 +103,16 @@ async def root():
 
 #WebSocket helper --------------------------------
 async def broadcast_progress(message: dict):
+    stale_connections = []
     for connection in active_connections:
-        await connection.send_json(message)
+        try:
+            await connection.send_json(message)
+        except Exception:
+            stale_connections.append(connection)
+
+    for connection in stale_connections:
+        if connection in active_connections:
+            active_connections.remove(connection)
 
 #WebSocket Endpoint --------------------------------
 @app.websocket("/websocket_progress")
@@ -134,6 +158,7 @@ async def launch_scraping():
     # Launch Celery background task
     await r_client.set("scraper_control_state", "running")
     task = runScrapers.delay()
+    logger.info("Scraping launched manually, task_id=%s", task.id)
     await r_client.set("current_scraper_task_id", task.id)
     
     return {"state": "running", "message": "Scraping launched successfully"}
@@ -188,3 +213,13 @@ async def stop_scraping():
 @app.get("/scrape/status")
 async def get_scraping_status():
     return scraping_status
+
+
+@app.get("/scrape/db-count")
+async def get_scrape_db_count():
+    try:
+        products_in_db = await asyncio.to_thread(getProductsCount)
+        return {"products_in_db": products_in_db}
+    except Exception as error:
+        logger.exception("Failed reading products count from database")
+        return {"products_in_db": 0, "error": str(error)}

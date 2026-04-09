@@ -5,7 +5,7 @@ import redis
 import os
 
 from src import config
-from src.database import enrichProductsWithCategoryIds, saveProductsToDB
+from src.database import clearProductsTable, enrichProductsWithCategoryIds, saveProductsToDB
 from src.io import saveProductsToJson
 from src.logger import configureLogging
 from src.scrapers import MyTekScraper, TunisianetScraper
@@ -59,7 +59,7 @@ def runScrapers(self):
     if product_data:
         saveProductsToJson(product_data, config.DEFAULT_OUTPUT_FILE)
         print(f"[INFO] Total products scraped: {len(product_data)}")
-        publish_progress("running", "Saving products to database...", len(product_data))
+        publish_progress("running", "Refreshing products table...", len(product_data))
 
         try:
             initDb()
@@ -67,6 +67,8 @@ def runScrapers(self):
                 category_mappings = loadCategoryMappings(session)
                 product_data = enrichProductsWithCategoryIds(product_data, session, category_mappings)
 
+            clearProductsTable(logger=logger)
+            publish_progress("running", "Saving refreshed products to database...", len(product_data))
             saveProductsToDB(product_data, logger=logger)
             publish_progress("completed", "Scraping and DB injection complete", len(product_data))
             

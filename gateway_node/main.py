@@ -6,6 +6,7 @@ import websockets   #type: ignore
 import httpx
 import os
 import json
+import re
 
 app = FastAPI(
     title="Gateway Node",
@@ -25,11 +26,141 @@ app.add_middleware(
 class SearchQuery(BaseModel):
     query: str
 
+
+class ChatQuery(BaseModel):
+    message: str
+
+
+class IntentQuery(BaseModel):
+    message: str
+
 SCRAPER_URL = os.getenv("SCRAPER_URL", "http://localhost:8001")
 SCRAPER_WS_URL = SCRAPER_URL.replace("http://", "ws://").replace("https://", "wss://")
 RANKER_URL = os.getenv("RANKER_URL", "http://localhost:8002")
 RANKER_WS_URL = RANKER_URL.replace("http://", "ws://").replace("https://", "wss://")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+
+PRODUCT_INTENT_PATTERN = re.compile(
+    r"(buy|purchase|recommend|suggest|looking for|need a|need an|find me|search|best|budget|price|laptop|pc|computer|phone|smartphone|tablet|headset|headphone|earbuds|keyboard|mouse|monitor|printer|camera|ssd|ram|gpu|iphone|samsung|xiaomi|macbook|lenovo|hp|asus|dell|portable|ordinateur|pc portable|t[ée]l[ée]phone|prix|produit|article)",
+    re.IGNORECASE,
+)
+
+
+def heuristic_classify_intent(message: str) -> Dict[str, Any]:
+    """Fallback intent classifier when LLM is unavailable or fails."""
+    if PRODUCT_INTENT_PATTERN.search(message):
+        return {
+            "intent": "product_search",
+            "confidence": 0.72,
+            "source": "heuristic",
+            "reason": "Matched shopping/product keywords",
+        }
+
+    return {
+        "intent": "normal_chat",
+        "confidence": 0.68,
+        "source": "heuristic",
+        "reason": "No strong shopping keyword signal",
+    }
+
+
+def extract_json_object(text: str) -> Dict[str, Any] | None:
+    """Extract first JSON object from model output safely."""
+    if not text:
+        return None
+
+    text = text.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    try:
+        parsed = json.loads(text[start : end + 1])
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return None
+
+    return None
+
+
+async def llm_classify_intent(message: str) -> Dict[str, Any] | None:
+    """Use Gemini to classify user intent into normal_chat or product_search."""
+    if not GEMINI_API_KEY:
+        return None
+
+    classifier_prompt = (
+        "Classify the user message into one of two intents:\n"
+        "- product_search: user wants product recommendations, comparisons, prices, specs, or shopping help\n"
+        "- normal_chat: greetings, general conversation, non-shopping Q&A\n\n"
+        "Return strict JSON only with this schema:\n"
+        '{"intent":"product_search|normal_chat","confidence":0.0,"reason":"short reason"}\n\n'
+        f"User message: {message}"
+    )
+
+    request_payload = {
+        "contents": [{"parts": [{"text": classifier_prompt}]}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "topP": 0.1,
+            "maxOutputTokens": 120,
+        },
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{LLM_MODEL}:generateContent"
+    params = {"key": GEMINI_API_KEY}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(url, params=params, json=request_payload)
+            if response.status_code == 429:
+                return None
+            response.raise_for_status()
+            data = response.json()
+
+        raw = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+            .strip()
+        )
+
+        parsed = extract_json_object(raw)
+        if not parsed:
+            return None
+
+        intent = parsed.get("intent", "").strip().lower()
+        if intent not in {"product_search", "normal_chat"}:
+            return None
+
+        confidence = parsed.get("confidence", 0.0)
+        try:
+            confidence = float(confidence)
+        except Exception:
+            confidence = 0.0
+
+        confidence = max(0.0, min(1.0, confidence))
+        reason = str(parsed.get("reason", "LLM classification"))[:140]
+
+        return {
+            "intent": intent,
+            "confidence": confidence,
+            "source": "llm",
+            "reason": reason,
+        }
+    except Exception:
+        return None
 
 
 @app.get("/")
@@ -210,6 +341,21 @@ async def proxy_scraping_status():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/scrape/db-count")
+async def proxy_scraping_db_count():
+    """Proxy scraper DB count request to scraper node"""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(f"{SCRAPER_URL}/scrape/db-count")
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        status_code = getattr(e.response, "status_code", 500) if hasattr(e, "response") else 500
+        raise HTTPException(status_code=status_code, detail=f"Scraper service error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.websocket("/websocket_progress")
 async def proxy_websocket_progress(websocket: WebSocket):
     """Proxy websocket connection to scraper node for progress updates"""
@@ -251,6 +397,104 @@ async def search(query_data: SearchQuery):
         raise HTTPException(status_code=status_code, detail=f"Ranker service error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/intent/classify")
+async def classify_intent(query_data: IntentQuery):
+    """Classify whether a user message is product search or regular chat."""
+    user_message = (query_data.message or "").strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    llm_result = await llm_classify_intent(user_message)
+    if llm_result:
+        return llm_result
+
+    return heuristic_classify_intent(user_message)
+
+
+@app.post("/chat")
+async def general_chat(query_data: ChatQuery):
+    """General conversational endpoint for non-product chat."""
+    user_message = (query_data.message or "").strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="Missing GEMINI_API_KEY/API_KEY for LLM chat")
+
+    prompt = (
+        "You are a helpful shopping assistant chatbot. "
+        "For normal conversation, respond naturally like a regular LLM. "
+        "Keep responses concise, friendly, and practical."
+    )
+
+    request_payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": f"{prompt}\n\nUser: {user_message}"}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "topP": 0.9,
+            "maxOutputTokens": 512,
+        },
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{LLM_MODEL}:generateContent"
+    params = {"key": GEMINI_API_KEY}
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            data = None
+            for attempt in range(2):
+                response = await client.post(url, params=params, json=request_payload)
+
+                if response.status_code in (429, 503) and attempt == 0:
+                    # One quick retry for temporary provider-side throttling/outage.
+                    continue
+
+                if response.status_code == 429:
+                    raise HTTPException(status_code=503, detail="LLM is currently rate-limited. Please retry shortly.")
+
+                if response.status_code == 503:
+                    raise HTTPException(status_code=503, detail="LLM service is temporarily unavailable. Please retry shortly.")
+
+                if response.status_code >= 500:
+                    raise HTTPException(status_code=503, detail="LLM provider is temporarily unavailable. Please retry shortly.")
+
+                if response.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="LLM request was rejected by the provider.")
+
+                data = response.json()
+                break
+
+            if data is None:
+                raise HTTPException(status_code=503, detail="LLM service is temporarily unavailable. Please retry shortly.")
+
+        generated_text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+            .strip()
+        )
+
+        if not generated_text:
+            generated_text = "I couldn't generate a response right now. Please try again."
+
+        return {"response": generated_text}
+    except HTTPException:
+        raise
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Could not reach LLM service. Please retry shortly.")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Unexpected LLM service error.")
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Chat failed: {error}")
 
 @app.websocket("/ws/status/{task_id}")
 async def status_websocket(websocket: WebSocket, task_id: str):

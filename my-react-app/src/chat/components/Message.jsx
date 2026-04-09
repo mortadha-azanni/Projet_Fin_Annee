@@ -9,6 +9,12 @@ export default function Message({ message }) {
   return (
     <div className={`message ${isUser ? 'user' : 'ai'}`}>
       <div className="message-content">
+        {!isUser && message.mode === 'product_search' && (
+          <div className="message-meta">
+            <span className="mode-pill mode-product">Product Search</span>
+          </div>
+        )}
+
         <div className="bubble">
           {isUser ? (
             message.content

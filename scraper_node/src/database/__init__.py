@@ -10,6 +10,12 @@ def saveProductsToDB(*args, **kwargs):
 	return _saveProductsToDB(*args, **kwargs)
 
 
+def clearProductsTable(*args, **kwargs):
+	from .database import clearProductsTable as _clearProductsTable
+
+	return _clearProductsTable(*args, **kwargs)
+
+
 __all__ = [
 	"Base",
 	"Category",
@@ -18,5 +24,6 @@ __all__ = [
 	"enrichProductsWithCategoryIds",
 	"getCategoryIdByUrl",
 	"normalizeCategoryUrl",
+	"clearProductsTable",
 	"saveProductsToDB",
 ]

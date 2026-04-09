@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from src import config
@@ -39,3 +39,9 @@ def getSession() -> Iterator[Session]:
 
 def initDb() -> None:
     Base.metadata.create_all(bind=engine)
+
+
+def getProductsCount() -> int:
+    with engine.connect() as connection:
+        count = connection.execute(text("SELECT COUNT(*) FROM products")).scalar()
+    return int(count or 0)

@@ -60,3 +60,28 @@ API Gateway service that handles authentication, caching, and orchestrates reque
 | `JWT_SECRET_KEY` | Secret key for JWT signing | required |
 
 ## Auth Folder Structure
+
+    auth/
+    ├── __init__.py
+    ├── router.py        ← register, login, admin login endpoints
+    ├── jwt.py           ← JWT token creation and validation
+    ├── dependencies.py  ← get_current_user, get_current_admin
+    └── models.py        ← Pydantic models
+
+## Dependencies
+
+- `fastapi` - Web framework
+- `uvicorn` - ASGI server
+- `httpx` - Async HTTP client for inter-service communication
+- `redis` - Redis client for caching and history
+- `supabase` - Supabase client for user storage
+- `python-jose` - JWT token handling
+- `passlib` - Password hashing
+- `websockets` - WebSocket proxying
+
+## Development
+
+```bash
+uv sync
+uv run uvicorn main:app --reload --port 8000
+```

@@ -2,72 +2,96 @@ import os
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from passlib.context import CryptContext
-from supabase import create_client, Client
+import asyncpg
 from .models import RegisterRequest, TokenResponse
 from .jwt import create_access_token
 
 router = APIRouter()
 
-# ─── Supabase Client ─────────────────────────────────────────────
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 # ─── Password Hashing ────────────────────────────────────────────
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+# ─── DB Connection ───────────────────────────────────────────────
+async def get_db():
+    """Return a PostgreSQL connection"""
+    conn = await asyncpg.connect(
+        host=os.getenv("DB_HOST"),
+        port=int(os.getenv("DB_PORT", "5432")),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        ssl="require"
+    )
+    return conn
+
+
+# ─── Auth Endpoints ──────────────────────────────────────────────
 @router.post("/register", response_model=TokenResponse)
 async def register(data: RegisterRequest):
     """Register a new user"""
-    # Check if email already exists
-    existing = supabase.table("users").select("id").eq("email", data.email).execute()
-    if existing.data:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    conn = await get_db()
+    try:
+        # Check if email already exists
+        existing = await conn.fetchrow(
+            "SELECT id FROM users WHERE email = $1", data.email
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash password before storing
-    hashed = pwd_context.hash(data.password)
+        # Hash password
+        hashed = pwd_context.hash(data.password)
 
-    # Insert into Supabase
-    result = supabase.table("users").insert({
-        "email": data.email,
-        "hashed_password": hashed
-    }).execute()
+        # Insert into DB
+        user = await conn.fetchrow(
+            "INSERT INTO users (email, hashed_password) VALUES ($1, $2) RETURNING id",
+            data.email, hashed
+        )
 
-    user = result.data[0]
+        token = create_access_token({"id": str(user["id"]), "role": "user"})
+        return TokenResponse(access_token=token)
 
-    # Return JWT token
-    token = create_access_token({"id": str(user["id"]), "role": "user"})
-    return TokenResponse(access_token=token)
+    finally:
+        await conn.close()
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(form: OAuth2PasswordRequestForm = Depends()):
     """Login a user and return JWT token"""
-    result = supabase.table("users").select("*").eq("email", form.username).execute()
-    if not result.data:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+    conn = await get_db()
+    try:
+        user = await conn.fetchrow(
+            "SELECT * FROM users WHERE email = $1", form.username
+        )
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    user = result.data[0]
+        if not pwd_context.verify(form.password, user["hashed_password"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if not pwd_context.verify(form.password, user["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        token = create_access_token({"id": str(user["id"]), "role": "user"})
+        return TokenResponse(access_token=token)
 
-    token = create_access_token({"id": str(user["id"]), "role": "user"})
-    return TokenResponse(access_token=token)
+    finally:
+        await conn.close()
 
 
 @router.post("/admin/login", response_model=TokenResponse)
 async def admin_login(form: OAuth2PasswordRequestForm = Depends()):
     """Login an admin and return JWT token"""
-    result = supabase.table("admins").select("*").eq("email", form.username).execute()
-    if not result.data:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+    conn = await get_db()
+    try:
+        admin = await conn.fetchrow(
+            "SELECT * FROM admins WHERE email = $1", form.username
+        )
+        if not admin:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    admin = result.data[0]
+        if not pwd_context.verify(form.password, admin["hashed_password"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if not pwd_context.verify(form.password, admin["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        token = create_access_token({"id": str(admin["id"]), "role": "admin"})
+        return TokenResponse(access_token=token)
 
-    token = create_access_token({"id": str(admin["id"]), "role": "admin"})
-    return TokenResponse(access_token=token)
+    finally:
+        await conn.close()

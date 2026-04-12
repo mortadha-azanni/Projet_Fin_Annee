@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 from pydantic import BaseModel
@@ -6,12 +6,19 @@ import websockets   #type: ignore
 import httpx
 import os
 import json
+from auth.router import router as auth_router
+from auth.dependencies import get_current_admin
+from auth.jwt import decode_token
+from auth.models import TokenData
+import redis.asyncio as aioredis
+
 
 app = FastAPI(
     title="Gateway Node",
     description="API Gateway for scraper and ranker microservices",
     version="0.1.0"
 )
+app.include_router(auth_router, prefix="/auth", tags=["Auth"]) 
 
 # Add CORS Middleware to allow frontend communication
 app.add_middleware(
@@ -32,6 +39,51 @@ RANKER_WS_URL = RANKER_URL.replace("http://", "ws://").replace("https://", "wss:
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 
 
+CACHE_TTL = 1800  # 30mins
+HISTORY_LIMIT = 5
+BRAIN_URL = os.getenv("BRAIN_URL", "http://brain:8001")
+
+
+async def get_redis():
+    """Return async Redis client. Returns None if unavailable."""
+    try:
+        client = aioredis.Redis(host=REDIS_HOST, decode_responses=True)
+        await client.ping()
+        return client
+    except Exception:
+        return None
+
+
+async def get_history(r, user_id: str) -> list:
+    """Fetch last 5 conversations for a user from Redis"""
+    if not r:
+        return []
+    raw = await r.get(f"history:{user_id}")
+    return json.loads(raw) if raw else []
+
+
+async def save_history(r, user_id: str, history: list):
+    """Save updated conversation history to Redis"""
+    if not r:
+        return
+    history = history[-HISTORY_LIMIT:]
+    await r.set(f"history:{user_id}", json.dumps(history))
+
+
+async def get_cache(r, query: str):
+    """Check if query results are cached"""
+    if not r:
+        return None
+    raw = await r.get(f"cache:{query}")
+    return json.loads(raw) if raw else None
+
+
+async def set_cache(r, query: str, results: list):
+    """Cache Top 20 results for 30 minutes"""
+    if not r:
+        return
+    await r.setex(f"cache:{query}", CACHE_TTL, json.dumps(results))
+
 @app.get("/")
 async def root():
     return {
@@ -48,6 +100,84 @@ async def health():
     """Health check endpoint"""
     return {"status": "healthy"}
 
+
+@app.websocket("/ws/chat/{user_id}")
+async def websocket_chat(websocket: WebSocket, user_id: str):
+    """
+    Main chat WebSocket endpoint.
+    - Requires JWT token as query param: ws://gateway/ws/chat/123?token=xxx
+    - Fetches history from Redis
+    - Checks cache before forwarding to Brain
+    - Streams Brain response token by token back to client
+    """
+
+    # 1. Validate JWT token
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+    try:
+        decode_token(token)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    r = await get_redis()
+
+    try:
+        while True:
+            # 2. Receive query from client
+            query = await websocket.receive_text()
+
+            # 3. Fetch conversation history from Redis
+            history = await get_history(r, user_id)
+
+            # 4. Check cache
+            cached = await get_cache(r, query)
+            if cached:
+                await websocket.send_json({
+                    "type": "results",
+                    "data": cached,
+                    "from_cache": True
+                })
+                continue
+
+            # 5. Forward query + history to Brain and stream response
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{BRAIN_URL}/query",
+                        json={"query": query, "history": history}
+                    ) as response:
+                        results = []
+                        async for chunk in response.aiter_text():
+                            await websocket.send_json({
+                                "type": "token",
+                                "data": chunk
+                            })
+                            results.append(chunk)
+
+                # 6. Cache the results
+                await set_cache(r, query, results)
+
+                # 7. Update and save history
+                history.append({"role": "user", "content": query})
+                history.append({"role": "assistant", "content": "".join(results)})
+                await save_history(r, user_id, history)
+
+                # 8. Signal end of stream to client
+                await websocket.send_json({"type": "done"})
+
+            except httpx.RequestError as e:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Could not reach Brain: {str(e)}"
+                })
+
+    except WebSocketDisconnect:
+        pass
 
 @app.get("/services/health")
 async def check_services_health():
@@ -76,72 +206,11 @@ async def check_services_health():
     return health_status
 
 
-@app.get("/scrape-and-rank")
-async def ETL(url: str):
-    """
-    Complete workflow: scrape URL and rank results
-    
-    Args:
-        url: URL to scrape
-    
-    Returns:
-        Ranked results from the scraped data
-    """
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # Step 1: Scrape the URL
-            scrape_response = await client.get(
-                f"{SCRAPER_URL}/scrape",
-                params={"url": url}
-            )
-            scrape_response.raise_for_status()
-            scrape_data = scrape_response.json()
-            
-            # Step 2: Rank the scraped data
-            if scrape_data.get("data"):
-                rank_response = await client.post(
-                    f"{RANKER_URL}/rank",
-                    json=scrape_data["data"]
-                )
-                rank_response.raise_for_status()
-                rank_data = rank_response.json()
-                
-                return {
-                    "success": True,
-                    "url": url,
-                    "scraped_items": len(scrape_data.get("data", [])),
-                    "ranked_results": rank_data.get("ranked_items", []),
-                    "final_response": rank_data.get("final_response", "")
-                }
-            else:
-                return {
-                    "success": True,
-                    "url": url,
-                    "scraped_items": 0,
-                    "ranked_results": [],
-                    "final_response": "",
-                    "message": "No data scraped from URL"
-                }
-                
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Service error: {str(e)}"
-        )
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service unavailable: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal error: {str(e)}"
-        )
+
 
 
 @app.post("/scrape/launch")
-async def launch_scraping():
+async def launch_scraping(current_admin: TokenData = Depends(get_current_admin)):
     """Proxy scrape launch request to scraper node"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -155,7 +224,7 @@ async def launch_scraping():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scrape/pause")
-async def pause_scraping():
+async def pause_scraping(admin: TokenData = Depends(get_current_admin)):
     """Proxy scrape pause request to scraper node"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -169,7 +238,7 @@ async def pause_scraping():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scrape/resume")
-async def resume_scraping():
+async def resume_scraping(admin: TokenData = Depends(get_current_admin)):
     """Proxy scrape resume request to scraper node"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -183,7 +252,7 @@ async def resume_scraping():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scrape/stop")
-async def stop_scraping():
+async def stop_scraping(admin: TokenData = Depends(get_current_admin)):
     """Proxy scrape stop request to scraper node"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -197,7 +266,7 @@ async def stop_scraping():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/scrape/status")
-async def proxy_scraping_status():
+async def proxy_scraping_status(admin: TokenData = Depends(get_current_admin)):
     """Proxy scrape status request to scraper node"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

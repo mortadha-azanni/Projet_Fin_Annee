@@ -1,25 +1,56 @@
-## React + Vite Frontend Setup
+# Nexus Frontend (React + Vite)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules. 
-The application runs as the frontend UI (typically on Vite's default port, such as 5173).
+Frontend app for:
 
-## Environment Variables (.env)
+- Chat interface at /chat
+- Admin interface at /admin
 
-You need to set up the necessary `.env` variables for the frontend to connect to the backend services. Create a `.env` file in the root of `my-react-app` based on your API URLs:
+## Tech Stack
 
+- React 19
+- React Router
+- Vite
+- ESLint
+
+## Environment Variables
+
+Create my-react-app/.env:
+
+```env
+VITE_API_URL=http://localhost:8000
+VITE_WS_URL=ws://localhost:8000
 ```
-VITE_API_BASE_URL=http://localhost:8000 # Example pointing to Gateway Node
+
+These are used by src/chat/hooks/useChat.js:
+
+- POST {VITE_API_URL}/search
+- WS {VITE_WS_URL}/ws/status/{task_id}
+
+## Install and Run
+
+```bash
+npm install
+npm run dev
 ```
 
-Currently, two official plugins are available:
+Default local URL: http://localhost:5173
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Build and Lint
 
-## React Compiler
+```bash
+npm run build
+npm run lint
+npm run preview
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Current Routes
 
-## Expanding the ESLint configuration
+- / -> redirects to /chat
+- /chat -> ChatPage
+- /admin -> AdminPage
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Frontend Structure
+
+- src/chat/: chat UI, transport hook, message components.
+- src/admin/: admin page and ETL controls UI.
+- src/shared/tokens.css: shared design tokens.

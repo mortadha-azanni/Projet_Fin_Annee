@@ -1,59 +1,76 @@
 # Scraper Node
 
-Web scraping microservice for extracting data from URLs.
+Scraper Node manages ETL scraping lifecycle and publishes live progress updates.
 
-## Features
+## What It Does
 
-- URL validation
-- HTML content extraction
-- Data parsing and structuring
-- Future: JavaScript rendering, proxy support, rate limiting
+- Launches scraping in Celery background tasks.
+- Supports pause, resume, and stop control flow.
+- Exposes current scraping status.
+- Streams progress updates to websocket clients.
 
-## Endpoints
+## Runtime Architecture
 
-### `GET /`
-Service information
+- FastAPI app in main.py handles control endpoints.
+- Celery task is triggered via runScrapers.delay().
+- Redis stores control state and task id.
+- A Redis Pub/Sub listener forwards scraper progress events to connected websocket clients.
 
-### `GET /health`
-Health check endpoint
+## API Endpoints
 
-### `GET /scrape`
-Scrape data from a given URL
+### GET /
+Returns service metadata.
 
-**Parameters:**
-- `url` (query param): URL to scrape
+### GET /health
+Returns service health.
 
-**Response:**
+### POST /scrape/launch
+Starts a scraping run if no active run is in progress.
+
+### POST /scrape/pause
+Sets scraper control state to paused.
+
+### POST /scrape/resume
+Resumes a paused scraping run.
+
+### POST /scrape/stop
+Stops scraping and revokes current Celery task when available.
+
+### GET /scrape/status
+Returns in-memory status payload:
+
 ```json
 {
-  "url": "https://example.com",
-  "message": "Scraping functionality to be implemented",
-  "data": []
+  "state": "idle|running|paused|stopping|completed|error",
+  "message": "status details",
+  "urls_scraped": 0
 }
 ```
 
-## TODO: Implement Scraping Logic
+### WS /websocket_progress
+Pushes live status updates to connected clients.
 
-### Option 1: BeautifulSoup (for static sites)
-```python
-import requests
-from bs4 import BeautifulSoup
-```
+## Local Development
 
-### Option 2: Playwright (for JavaScript-heavy sites)
-```python
-from playwright.async_api import async_playwright
-```
-
-## Dependencies
-
-- `fastapi` - Web framework
-- `uvicorn` - ASGI server
-- Future: `beautifulsoup4`, `requests`, or `playwright`
-
-## Development
+Install dependencies:
 
 ```bash
 uv sync
-uv run uvicorn main:app --reload --port 8001
 ```
+
+Run API:
+
+```bash
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Run worker:
+
+```bash
+uv run celery -A celery_app worker --loglevel=info
+```
+
+## Docker Mapping in Root Compose
+
+- Container listens on 8000.
+- Exposed locally as port 8001.

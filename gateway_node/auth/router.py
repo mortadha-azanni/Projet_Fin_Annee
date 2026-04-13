@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordRequestForm
-from passlib.context import CryptContext
+import bcrypt
 import asyncpg
 from .models import RegisterRequest, TokenResponse
 from .jwt import create_access_token
@@ -9,7 +9,11 @@ from .jwt import create_access_token
 router = APIRouter()
 
 # ─── Password Hashing ────────────────────────────────────────────
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 
 # ─── DB Connection ───────────────────────────────────────────────
@@ -40,7 +44,7 @@ async def register(data: RegisterRequest):
             raise HTTPException(status_code=400, detail="Email already registered")
 
         # Hash password
-        hashed = pwd_context.hash(data.password)
+        hashed = hash_password(data.password)
 
         # Insert into DB
         user = await conn.fetchrow(
@@ -66,7 +70,7 @@ async def login(form: OAuth2PasswordRequestForm = Depends()):
         if not user:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        if not pwd_context.verify(form.password, user["hashed_password"]):
+        if not verify_password(form.password, user["hashed_password"]):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         token = create_access_token({"id": str(user["id"]), "role": "user"})
@@ -87,7 +91,7 @@ async def admin_login(form: OAuth2PasswordRequestForm = Depends()):
         if not admin:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        if not pwd_context.verify(form.password, admin["hashed_password"]):
+        if not verify_password(form.password, admin["hashed_password"]):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         token = create_access_token({"id": str(admin["id"]), "role": "admin"})

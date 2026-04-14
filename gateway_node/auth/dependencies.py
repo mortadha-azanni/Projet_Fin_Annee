@@ -21,3 +21,10 @@ async def get_current_admin(token: str = Depends(oauth2_admin_scheme)) -> TokenD
     if token_data.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return token_data
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
+    """Validates JWT and returns current user"""
+    token_data = decode_token(token)
+    if token_data.role not in ["user", "admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return token_data

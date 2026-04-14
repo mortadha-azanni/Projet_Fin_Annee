@@ -7,8 +7,21 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
+    token_type: str = "bearer"
+
+
+class AuthResponse(BaseModel):
+    token: str
+    role: str
+    # OAuth2 compatibility for Swagger UI
+    access_token: Optional[str] = None
     token_type: str = "bearer"
 
 

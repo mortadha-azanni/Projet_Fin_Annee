@@ -1,78 +1,93 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any, Optional
-import httpx
-import os
-import json
 
 from core.config import settings
+from core.database import create_pool, close_pool
 from auth.router import router as auth_router
 from routers.users import router as users_router
 from routers.etl import router as etl_router
 from routers.search import router as search_router
+from routers.admin import router as admin_router
+import httpx
+
+
+# ── Lifespan (startup / shutdown) ─────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await create_pool()
+    yield
+    await close_pool()
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="API Gateway for scraper and ranker microservices",
-    version=settings.VERSION
+    version=settings.VERSION,
+    lifespan=lifespan,
 )
 
-# Add CORS Middleware
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# allow_origins must be an explicit list when allow_credentials=True.
+# Set CORS_ORIGINS env var to a comma-separated list for production.
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include Routers
-app.include_router(auth_router, prefix="/auth", tags=["Auth"])
-app.include_router(users_router, prefix="/user", tags=["User"])
-app.include_router(etl_router, prefix="/scrape", tags=["ETL"])
-app.include_router(search_router, prefix="/search", tags=["Search"])
+# ── Routers ───────────────────────────────────────────────────────────────────
 
-# ─── Basic Endpoints ─────────────────────────────────────────────
+app.include_router(auth_router,  prefix="/auth",   tags=["Auth"])
+app.include_router(users_router, prefix="/user",   tags=["User"])
+app.include_router(etl_router,   prefix="/scrape", tags=["ETL"])
+app.include_router(search_router,                  tags=["Search"])
+app.include_router(admin_router, prefix="/admin",  tags=["Admin"])
+
+
+# ── Basic endpoints ───────────────────────────────────────────────────────────
+
 @app.get("/")
 async def root():
     return {
         "service": "gateway-node",
         "status": "running",
-        "version": settings.VERSION
+        "version": settings.VERSION,
     }
+
 
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
 
+
 @app.get("/services/health")
 async def check_services_health():
-    health_status = {
-        "gateway": "healthy",
-        "scraper": "unknown",
-        "ranker": "unknown"
-    }
+    status_map = {"gateway": "healthy", "scraper": "unknown", "ranker": "unknown"}
     async with httpx.AsyncClient(timeout=5.0) as client:
-        try:
-            response = await client.get(f"{settings.SCRAPER_URL}/health")
-            health_status["scraper"] = "healthy" if response.status_code == 200 else "unhealthy"
-        except Exception as e:
-            health_status["scraper"] = f"error: {str(e)}"
-        try:
-            response = await client.get(f"{settings.RANKER_URL}/health")
-            health_status["ranker"] = "healthy" if response.status_code == 200 else "unhealthy"
-        except Exception as e:
-            health_status["ranker"] = f"error: {str(e)}"
-    return health_status
+        for key, url in [("scraper", settings.SCRAPER_URL), ("ranker", settings.RANKER_URL)]:
+            try:
+                r = await client.get(f"{url}/health")
+                status_map[key] = "healthy" if r.status_code == 200 else "unhealthy"
+            except Exception as exc:
+                status_map[key] = f"error: {exc}"
+    return status_map
 
-# Legacy websocket progress proxy if still needed at root, 
-# though it's now also in etl_router under /scrape/progress
+
+# ── Legacy WebSocket aliases (kept for backwards compatibility) ────────────────
+
 @app.websocket("/websocket_progress")
 async def legacy_proxy_websocket_progress(websocket: WebSocket):
     from routers.etl import proxy_websocket_progress
     await proxy_websocket_progress(websocket)
 
-# Legacy status websocket proxy if still needed at root
+
 @app.websocket("/ws/status/{task_id}")
 async def legacy_status_websocket(websocket: WebSocket, task_id: str):
     from routers.search import status_websocket

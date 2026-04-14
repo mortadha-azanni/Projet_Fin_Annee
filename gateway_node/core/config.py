@@ -1,38 +1,58 @@
 import os
-from pydantic import BaseModel
-from typing import Optional
+import sys
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
-class Settings(BaseModel):
-    # App Settings
-    PROJECT_NAME: str = os.getenv("PROJECT_NAME", "Gateway Node")
-    VERSION: str = os.getenv("VERSION", "0.1.0")
-    DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
 
-    # URLs
-    SCRAPER_URL: str = os.getenv("SCRAPER_URL", "http://localhost:8001")
-    RANKER_URL: str = os.getenv("RANKER_URL", "http://localhost:8002")
-    BRAIN_URL: str = os.getenv("BRAIN_URL", "http://brain:8001")
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
-    # Database
-    DB_HOST: str = os.getenv("DB_HOST", "localhost")
-    DB_PORT: int = int(os.getenv("DB_PORT", "5432"))
-    DB_NAME: str = os.getenv("DB_NAME", "postgres")
-    DB_USER: str = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "password")
-    DB_SSL: str = os.getenv("DB_SSL", "prefer")
+    # ── App ──────────────────────────────────────────────────────────
+    PROJECT_NAME: str = "Gateway Node"
+    VERSION: str = "0.1.0"
+    DEBUG: bool = False
 
-    # Redis
-    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
-    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    # ── Downstream services ──────────────────────────────────────────
+    SCRAPER_URL: str = "http://localhost:8001"
+    RANKER_URL: str = "http://localhost:8002"
+    BRAIN_URL: str = "http://brain:8001"
 
-    # Security
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "change-this-in-production")
-    ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+    # ── Allowed CORS origins (comma-separated in env) ────────────────
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    # ── PostgreSQL ───────────────────────────────────────────────────
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_NAME: str = "postgres"
+    DB_USER: str = "postgres"
+    DB_PASSWORD: str  # Required — no insecure default
+    DB_SSL: str = "prefer"
+
+    # ── Redis ────────────────────────────────────────────────────────
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+
+    # ── JWT / Security ───────────────────────────────────────────────
+    JWT_SECRET_KEY: str  # Required — no insecure default
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+
+    # ── Derived helpers ──────────────────────────────────────────────
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
     @property
     def database_url(self) -> str:
-        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        return (
+            f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        )
 
     @property
     def scraper_ws_url(self) -> str:
@@ -42,4 +62,16 @@ class Settings(BaseModel):
     def ranker_ws_url(self) -> str:
         return self.RANKER_URL.replace("http://", "ws://").replace("https://", "wss://")
 
-settings = Settings()
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def jwt_secret_must_be_strong(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
+        return v
+
+
+try:
+    settings = Settings()
+except Exception as exc:
+    print(f"[gateway_node] FATAL — configuration error: {exc}", file=sys.stderr)
+    sys.exit(1)

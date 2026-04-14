@@ -61,11 +61,12 @@ async def status_websocket(websocket: WebSocket, task_id: str):
                     "status": task.info.get('status', 'Processing...') if task.info else 'Processing...'
                 }
             elif state == 'SUCCESS':
+                final_response = task.result.get('final_response') or task.result.get('message') or ''
                 response = {
                     "state": state,
                     "status": "Search Complete",
                     "results": task.result.get('results', []),
-                    "final_response": task.result.get('final_response', ''),
+                    "final_response": final_response,
                     "cache_key": task.result.get('cache_key'),
                 }
                 await websocket.send_json(response)

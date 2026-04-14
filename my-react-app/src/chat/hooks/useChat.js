@@ -1,6 +1,37 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { WELCOME_MESSAGE, MOCK_PRODUCTS } from '../constants/mockData';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+
+const SMALL_TALK_PHRASES = new Set([
+  'hi',
+  'hello',
+  'hey',
+  'yo',
+  'bonjour',
+  'salut',
+  'thanks',
+  'thank you',
+  'sup',
+  'what now',
+  'now what'
+]);
+
+const normalizeQueryText = (query) => {
+  const punctuation = new Set([',', '.', '!', '?', ';', ':', '-', '_', '[', ']', '{', '}', '(', ')', "'", '"']);
+  const lowered = query.trim().toLowerCase();
+  const cleaned = [...lowered].filter((ch) => !punctuation.has(ch)).join('');
+  return cleaned.split(' ').filter(Boolean).join(' ');
+};
+
+const isLikelySearchQuery = (query) => {
+  const normalized = normalizeQueryText(query);
+  if (normalized.length < 3) return false;
+  if (SMALL_TALK_PHRASES.has(normalized)) return false;
+  return true;
+};
+
 // Format the ranker results into UI product cards
 const mapProducts = (results) => {
   if (!Array.isArray(results)) return [];
@@ -53,6 +84,27 @@ export function useChat() {
   const sendMessage = useCallback((query) => {
     if (!query.trim() || isStreaming) return;
 
+    if (!isLikelySearchQuery(query)) {
+      const userMessage = {
+        id: Date.now(),
+        role: 'user',
+        content: query,
+        streaming: false,
+        products: []
+      };
+
+      const assistantMessage = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: 'I can help with product searches. Tell me what item, brand, or budget you want.',
+        streaming: false,
+        products: []
+      };
+
+      setMessages(prev => [...prev, userMessage, assistantMessage]);
+      return;
+    }
+
     const userMessage = {
       id: Date.now(),
       role: 'user',
@@ -75,20 +127,28 @@ export function useChat() {
       products: []
     }]);
 
-    fetch(`${import.meta.env.VITE_API_URL}/search`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query: query })
-    }).then(res => res.json())
-      .then(data => {
-        const taskId = data.task_id;
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/search`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query })
+        });
+
+        const payload = await res.json().catch(() => null);
+        if (!res.ok) {
+          const detail = payload?.detail || payload?.message || `Search request failed (${res.status})`;
+          throw new Error(detail);
+        }
+
+        const taskId = payload?.task_id;
         if (!taskId) {
           throw new Error('No task ID returned');
         }
 
-        const ws = new WebSocket(`${import.meta.env.VITE_WS_URL}/ws/status/${taskId}`);
+        const ws = new WebSocket(`${WS_URL}/ws/status/${taskId}`);
         streamRef.current = ws;
 
         ws.onmessage = (event) => {
@@ -120,19 +180,21 @@ export function useChat() {
         };
 
         ws.onerror = (error) => {
-          console.error("WebSocket error:", error);
+          console.error('WebSocket error:', error);
           setMessages(prev => prev.map(msg => 
             msg.id === aiMessageId ? { ...msg, content: 'WebSocket connection error.', streaming: false } : msg
           ));
           setIsStreaming(false);
+          streamRef.current = null;
         };
-      })
-      .catch(err => {
+      } catch (err) {
         setMessages(prev => prev.map(msg => 
-          msg.id === aiMessageId ? { ...msg, content: 'Error starting search.', streaming: false } : msg
+          msg.id === aiMessageId ? { ...msg, content: `Error starting search: ${err.message}`, streaming: false } : msg
         ));
         setIsStreaming(false);
-      });
+        streamRef.current = null;
+      }
+    })();
     // --- Real Transport Layer End ---
 
   }, [isStreaming]);

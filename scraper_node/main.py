@@ -44,6 +44,9 @@ async def redis_listener():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global r_client
+    r_client = redis.from_url(redis_url, decode_responses=True)
+    
     # Always boot in idle state; scraping must be started explicitly by /scrape/launch.
     await r_client.set("scraper_control_state", ScrapingState.IDLE.value)
     await r_client.delete("current_scraper_task_id")
@@ -62,6 +65,9 @@ async def lifespan(app: FastAPI):
         await listener_task
     except asyncio.CancelledError:
         pass
+    finally:
+        if r_client:
+            await r_client.aclose()
 
 
 app = FastAPI(title="Scraper Node", lifespan=lifespan)
@@ -131,18 +137,12 @@ async def websocket_progress(websocket: WebSocket):
         active_connections.remove(websocket)
 
 #Basic endpoints --------------------------------
-@app.get("/")
-async def root():
-    return {
-        "service": "scraper-node",
-        "status": "running"
-    }
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
 
 # ET controllers
-r_client = redis.Redis.from_url(redis_url, decode_responses=True)
+r_client: redis.Redis | None = None
 
 @app.post("/scrape/launch")
 async def launch_scraping():

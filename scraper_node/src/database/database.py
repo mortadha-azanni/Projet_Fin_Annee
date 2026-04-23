@@ -8,8 +8,10 @@ from typing import Any
 from sentence_transformers import SentenceTransformer  # type: ignore
 
 from .category_mapping import getCategoryIdByUrl
+from .category import get_category_path
 from .product import Product
 from .session import getSession
+from src.models import build_bm25_dictionary
 
 _EMBEDDING_MODEL: SentenceTransformer | None = None
 
@@ -72,6 +74,14 @@ def saveProductsToDB(
 	model = _getEmbeddingModel()
 
 	with getSession() as session:
+		category_paths = {}
+		resolved_category_ids = {}
+		for product in productData:
+			cat_id = _resolveCategoryId(product, session, category_id)
+			resolved_category_ids[id(product)] = cat_id
+			if cat_id not in category_paths:
+				category_paths[cat_id] = get_category_path(cat_id, session)
+
 		for i, product in enumerate(productData):
 			try:
 				if not product.get("name") or product.get("price") is None:
@@ -82,13 +92,18 @@ def saveProductsToDB(
 					skipped_count += 1
 					continue
 
+				cat_id = resolved_category_ids.get(id(product), category_id)
+				cat_path = category_paths.get(cat_id, "")
+				product["dictionary"] = build_bm25_dictionary(product, cat_path)
+
 				db_product = Product(
 					description=product.get("name", "N/A"),
 					price=float(product["price"]),
-					category_id=_resolveCategoryId(product, session, category_id),
+					category_id=cat_id,
 					urllink=product.get("url") or product.get("urlLink", ""),
 					urlimg=product.get("image") or product.get("imgUrl", ""),
 					embedding=model.encode(product.get("name", ""), convert_to_numpy=True).tolist(),
+					dictionary=product.get("dictionary", ""),
 				)
 				session.add(db_product)
 				pending_batch_count += 1

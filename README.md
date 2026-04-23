@@ -89,7 +89,7 @@ Once everything is booted, you can access the different interfaces:
 ### Stopping the Services
 To stop the backend microservices, run:
 ```bash
-docker compose down
+docker compose downproffisional
 ```
 To wipe data (including the Redis cache), run:
 ```bash

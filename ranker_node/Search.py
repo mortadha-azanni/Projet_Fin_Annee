@@ -1,5 +1,5 @@
 from BM25.BM25Engine import BM25Engine
-from BM25.database import getCategoriesPath, getProductByCategory
+from BM25.database import getCategoriesPath, getProductByCategory, getProductByCategoryTree
 from BM25.utils import getAVGDocLength
 
 from SementicSearch.SementicEngine import SementicEngine
@@ -100,14 +100,16 @@ def perform_search(self, user_query_str: str):
     price_min = llm_results.get("price", {}).get("min_price")
     price_max = llm_results.get("price", {}).get("max_price")
     selected_category_id = llm_results.get("selected_category_id")
+    expand_to_children = llm_results.get("expand_to_children", False)
 
     if not selected_category_id:
         # Fallback to the first category if the LLM fails to return one
         print("[WARN] LLM failed to return a selected_category_id, logging fallback.")
         selected_category_id = top_category_paths_results[0]["document"]["category_id"]
+        expand_to_children = True  # Default to expanding for fallback
 
     print(f"[Price Filter] {f'${price_min} - ${price_max}' if price_min or price_max else 'No price filter'}")
-    print(f"[Selected Category ID] {selected_category_id}\n")
+    print(f"[Selected Category ID] {selected_category_id} (expand_to_children: {expand_to_children})\n")
 
     # Extract search queries for downstream engines
     bm25_search_query = " ".join(llm_results.get("bm25_keywords", []))
@@ -115,19 +117,26 @@ def perform_search(self, user_query_str: str):
         bm25_search_query = user_query_str
 
     semantic_search_query = llm_results.get("semantic_blob", user_query_str)
-    
+
     # Generate embedding for the semantic query downstream using the existing embed logic
     from SementicSearch.utils import embed
     from SementicSearch.SementicEngine import MODEL, DIMS
     query_embedding = embed(semantic_search_query, MODEL, DIMS)
 
     if self:
-        self.update_state(state='PROGRESS', meta={'status': f'Fetching top products efficiently for category {selected_category_id}...'})
+        mode_str = "tree" if expand_to_children else "exact"
+        self.update_state(state='PROGRESS', meta={'status': f'Fetching products for category {selected_category_id} ({mode_str})...'})
 
-    # Stage 2.5: Fetch products pushed entirely to PGVector using Cosine Distance (`<=>`)
-    print(f"\n[Fetching Products] Fetching top products efficiently strictly using pgvector for Category ID: {selected_category_id}")
+    # Stage 2.5: Fetch products with hierarchical expansion
+    if expand_to_children:
+        print(f"\n[Fetching Products] Fetching ALL products in category tree {selected_category_id}")
+        fetch_func = getProductByCategoryTree
+    else:
+        print(f"\n[Fetching Products] Fetching EXACT products for category {selected_category_id}")
+        fetch_func = getProductByCategory
+
     try:
-        product_docs = getProductByCategory(
+        product_docs = fetch_func(
             selected_category_id,
             price_min=price_min,
             price_max=price_max,
@@ -135,31 +144,32 @@ def perform_search(self, user_query_str: str):
             limit=200
         )
     except Exception as exc:
-        print(f"    [ERROR] Failed to fetch products for selected category {selected_category_id}: {exc}")
+        print(f"    [ERROR] Failed to fetch products: {exc}")
         return {"error": f"Database fetch error: {exc}"}
 
     if not product_docs and (price_min is not None or price_max is not None):
-        print(f"\n[Fallback] No products found with price range {price_min}-{price_max}. Retrying without price constraints...")
+        print(f"\n[Fallback] No products found with price range. Retrying without price constraints...")
         price_min, price_max = None, None
         try:
-            product_docs = getProductByCategory(
+            product_docs = fetch_func(
                 selected_category_id,
-                price_min=price_min,
-                price_max=price_max,
+                price_min=None,
+                price_max=None,
                 query_embedding=query_embedding,
                 limit=200
             )
         except Exception as exc:
-            print(f"    [ERROR] Failed to fetch products for selected category {selected_category_id} during fallback: {exc}")
+            print(f"    [ERROR] Failed to fetch products: {exc}")
 
     if not product_docs:
-        print(f"\n[Fallback] Still no products found in category {selected_category_id}. Trying other top semantic categories...")
+        print(f"\n[Fallback] No products found in category {selected_category_id}. Trying other categories...")
         price_min, price_max = None, None
         for cat_res in top_category_paths_results:
             fallback_cat_id = cat_res["document"]["category_id"]
             if fallback_cat_id != selected_category_id:
                 try:
-                    product_docs = getProductByCategory(
+                    # Try tree expansion for fallback categories too
+                    product_docs = getProductByCategoryTree(
                         fallback_cat_id,
                         price_min=None,
                         price_max=None,
@@ -167,7 +177,7 @@ def perform_search(self, user_query_str: str):
                         limit=200
                     )
                     if product_docs:
-                        print(f"    [Fallback Success] Found {len(product_docs)} products in fallback category {fallback_cat_id}")
+                        print(f"    [Fallback Success] Found {len(product_docs)} products in category tree {fallback_cat_id}")
                         break
                 except Exception as exc:
                     pass

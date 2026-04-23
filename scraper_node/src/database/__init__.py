@@ -2,6 +2,7 @@ from .base import Base
 from .category import Category
 from .category_mapping import CategoryMapping, enrichProductsWithCategoryIds, getCategoryIdByUrl, normalizeCategoryUrl
 from .product import Product
+from .path_string import PathString
 
 
 def saveProductsToDB(*args, **kwargs):
@@ -21,6 +22,7 @@ __all__ = [
 	"Category",
 	"CategoryMapping",
 	"Product",
+	"PathString",
 	"enrichProductsWithCategoryIds",
 	"getCategoryIdByUrl",
 	"normalizeCategoryUrl",

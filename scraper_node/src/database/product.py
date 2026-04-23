@@ -18,6 +18,7 @@ class Product(Base):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     urllink = Column(Text, nullable=False)
     urlimg = Column(Text, nullable=False)
+    dictionary = Column(Text, nullable=True)
 
     embedding = Column(Vector(384))
 

@@ -7,6 +7,8 @@ from .models import RegisterRequest, LoginRequest, AuthResponse, TokenData
 
 router = APIRouter()
 
+from .verification import verification_router
+router.include_router(verification_router)
 
 @router.post("/register", response_model=AuthResponse)
 async def register(data: RegisterRequest, conn: asyncpg.Connection = Depends(get_db)):

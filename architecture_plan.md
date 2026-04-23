@@ -1,6 +1,16 @@
 # PFA Distributed E-commerce Platform: Architecture & Implementation Plan
 
-This document serves as the high-level roadmap and architectural synthesis for the completion of the PFA Distributed E-commerce Platform. It incorporates the existing microservices architecture while designing the pathways to integrate the newly requested `business_owner`, `client`-posting functions, and enhancements to the **ETL**, **Ranker**, and **BI** modules.
+## 1. High-Level Architecture Overview
+
+The system is a distributed microservices environment leveraging Docker, FastAPI, Celery, Redis, and PostgreSQL. It now integrates a highly specialized **12-Stage Chat/Search Pipeline**.
+
+### 12-Stage Pipeline Summary
+- **Stage 0-3 (Ingress & Context)**: Client WSS connections → NGINX upgrades → Gateway JWT Auth & Redis socket mapping → History retrieval/Summarization.
+- **Stage 4-6 (Routing & Enrichment)**: LLM Intent Classifier (determining Chitchat vs Search) → Redis Cache Hit/Miss logic → NER Constraint extraction.
+- **Stage 7-8 (Search Core)**: Parallel Hybrid Search (pgvector + Keyword) + RRF → Cross-Encoder Re-Ranking & Diversity Filtering.
+- **Stage 9-12 (Synthesis & Egress)**: LLM Response formatting (Streaming) → Persistence logging → Subscribed Pub/Sub rapid delivery → Client render & Feedback.
+
+*See `CHAT_FLOWCHART.md` for the comprehensive sequence mapping.*
 
 ---
 
@@ -27,6 +37,11 @@ flowchart TD
         AuthProxy[Auth / Proxy Manager]
         WSChat[WebSocket Chat]
         ApprovalFlow[Business Approval / Registration]
+    end
+
+    %% Routing / Judging Layer
+    subgraph LLM_Judge [LLM_Judje Middle Phase]
+        IntentClassifier[OpenRouter Intent Classifier]
     end
 
     %% Search and Ranking Pipeline
@@ -65,6 +80,10 @@ flowchart TD
 
     Frontend -->|HTTP/REST| Gateway
     Frontend -->|WebSocket| Gateway
+
+    Gateway -->|User Prompt| LLM_Judge
+    LLM_Judge -->|Product Search Intent| RankerWorker
+    LLM_Judge -->|Other Intents| WSChat
 
     AuthProxy -->|Async Jobs / Tasks| Redis
     WSChat -->|Poll Status| Redis
@@ -130,9 +149,11 @@ flowchart TD
   3. Generate pgvector embeddings.
   4. Upsert to the PostgreSQL database with correct `source_type` (`scraped`, `business_shop`, or `client_post`).
 
-### 3.2. RANKER Modification
-**Current**: Performs vector search, BM25, and uses an LLM to synthesize final chat answers based on queried features.
+### 3.2. RANKER & LLM_JUDJE Modification
+**Current**: Gateway forcibly assumes all chat requests are product searches and blindly passes them to the Ranker.
 **Modification Required**:
+- **LLM_Judje Phase**: Before hitting the ranker, the user prompt is intercepted by the new `LLM_Judje/main.py` module. It queries OpenRouter (via a fast LLM model like Llama-3 8B) to determine the intent (e.g., `product_search`, `customer_support`, `small_talk`).
+- **Dynamic Routing**: If the intent is `product_search`, it forwards to the Celery Ranker. Otherwise, it handles it immediately synchronously (for example, generating a polite greeting for small talk). 
 - **Source Filtering**: Incorporate pre-filtering in the hybrid search (PostgreSQL where-clauses) that respects what the user is looking for. For instance, if a user wants "used items," prioritize `source_type = client_post`.
 - **Data Governance**: Ensure that if a business owner deletes or hides an item via their CRUD dashboard, the Ranker instantly ignores those vectors.
 - **Metadata Weighting (RRF)**: Implement Reciprocal Rank Fusion tweaks to prioritize verified `business_owner` listings slightly higher than anonymous `client_post` listings when matching relevance is identical.

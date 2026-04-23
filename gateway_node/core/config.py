@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
 
+    # ── LLM ──────────────────────────────────────────────────────────
+    GEMINI_API_KEY: str | None = None
+    LLM_MODEL: str = "gemini-2.5-flash"
+
     # ── JWT / Security ───────────────────────────────────────────────
     JWT_SECRET_KEY: str  # Required — no insecure default
     ALGORITHM: str = "HS256"

@@ -110,7 +110,7 @@ docker compose logs -f gateway ranker scraper celery_worker scraper_worker
 Stop services:
 
 ```bash
-docker compose down
+docker compose downproffisional
 ```
 
 Stop and remove volumes:

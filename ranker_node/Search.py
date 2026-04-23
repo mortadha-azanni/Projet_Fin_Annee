@@ -12,6 +12,42 @@ from LLM.FLLM import MarkdownDescription
 from celery_app import celery_app
 
 
+_SMALL_TALK_PHRASES = {
+    "hi",
+    "hello",
+    "hey",
+    "yo",
+    "bonjour",
+    "salut",
+    "thanks",
+    "thank you",
+    "sup",
+    "what now",
+    "now what",
+}
+
+
+def _normalize_query_text(query: str) -> str:
+    lowered = (query or "").strip().lower()
+    if not lowered:
+        return ""
+
+    punctuation = ",.!?;:-_()[]{}'\""
+    cleaned = lowered.translate(str.maketrans("", "", punctuation))
+    return " ".join(cleaned.split())
+
+
+def _is_product_search_query(query: str) -> bool:
+    normalized = _normalize_query_text(query)
+    if len(normalized) < 3:
+        return False
+
+    if normalized in _SMALL_TALK_PHRASES:
+        return False
+
+    return True
+
+
 def _strip_embedding(document: dict) -> dict:
     if not isinstance(document, dict):
         return document
@@ -31,6 +67,21 @@ def _sanitize_ranked_results(results: list[dict]) -> list[dict]:
 
 @celery_app.task(bind=True)
 def perform_search(self, user_query_str: str):
+    cleaned_query = (user_query_str or "").strip()
+
+    if not _is_product_search_query(cleaned_query):
+        if self:
+            self.update_state(
+                state='PROGRESS',
+                meta={'status': 'I can help with product searches. Tell me what item, brand, or budget you want.'}
+            )
+        return {
+            "results": [],
+            "final_response": "I can help with product searches. Tell me what item, brand, or budget you want, and I’ll look it up.",
+            "message": "No product search detected.",
+            "cache_key": None,
+        }
+
     # ============================================================================
     # Query Normalization & Expansion
     # ============================================================================
@@ -184,7 +235,12 @@ def perform_search(self, user_query_str: str):
 
     if not product_docs:
         print(f"\n[Final Failure] No products found in any related category.")
-        return {"results": [], "message": "No products found for the given criteria."}
+        return {
+            "results": [],
+            "final_response": "I couldn’t find matching products for that query. Try adding a brand, category, model, or budget.",
+            "message": "No products found for the given criteria.",
+            "cache_key": None,
+        }
 
     print(f"\n[Products Found] {len(product_docs)} total top pgvector products retrieved")
 

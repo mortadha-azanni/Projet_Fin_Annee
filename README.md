@@ -1,107 +1,120 @@
-# PFA (Projet Fin d'Année) - Automated E-commerce Search & Ranking System
+# PFA - Distributed E-commerce Search Platform
 
-A distributed microservices system built with **FastAPI**, **Celery**, **Redis**, **pgvector**, and **React/Vite**. This application features an intelligent Semantic Search and NLP pipeline that scrapes e-commerce data and uses Large Language Models and Hybrid Search (BM25 + Cosine Distance) to return the best product recommendations ranked by relevance and price.
+This repository contains a microservices-based product search platform built with FastAPI, Celery, Redis, PostgreSQL/pgvector, and React + Vite.
 
-## 🏗️ Architecture
+## Architecture
 
 ```text
-┌─────────────┐
-│   Client    │ (React / Vite)
-└──────┬──────┘
-       │ WebSocket & REST
-       ▼
-┌─────────────┐      ┌─────────────┐
-│   Gateway   │◄────►│    Redis    │
-│   :8000     │      │   :6379     │
-└──────┬──────┘      └─────────────┘
-       │                    ▲
-       ├──────────────┬─────┴────────────┐
-       ▼              ▼                  ▼
-┌─────────────┐ ┌─────────────┐    ┌─────────────┐
-│  Scraper    │ │   Ranker    │    │ Celery NLP  │ 
-│   :8001     │ │   :8002     │    │ Worker      │
-└─────────────┘ └─────────────┘    └─────────────┘
+Browser (React/Vite :5173)
+        |
+        | REST + WebSocket
+        v
+Gateway Node (:8000)
+   |          |            |
+   |          |            +--> Redis (:6380 local -> 6379 container)
+   |          |
+   |          +--> Ranker API (:8002 local -> 8000 container)
+   |                    |
+   |                    +--> Celery Worker (ranker_node/celery_app.py)
+   |
+   +--> Scraper API (:8001 local -> 8000 container)
+                        |
+                        +--> Celery Worker (scraper_node/celery_app.py)
 ```
 
-### Services Included
-- **Frontend Client** - React/Vite Application (`my-react-app`) listening on port `5173`. Includes a Chat Interface and an ETL Admin Dashboard.
-- **Gateway Node** (`:8000`) - API Gateway orchestrating REST & WebSocket traffic to downstream microservices.
-- **Scraper Node** (`:8001`) - Web scraping routines using Celery to harvest e-commerce hardware data.
-- **Ranker Node** (`:8002`) - Semantic and Keyword search using `SentenceTransformers`, `GLiNER` NER extraction, and `Google Gemini`.
-- **Celery Worker(s)** - Handles asynchronous NLP & Scraping Tasks to prevent API timeouts.
-- **Redis** (`:6380` locally, `:6379` internally) - Message broker for Celery and state caching layer.
+## Services
 
----
+- gateway_node: public backend entrypoint, auth endpoints, proxy endpoints, chat websocket.
+- ranker_node: async search task execution and websocket task status.
+- scraper_node: ETL/scraping control endpoints and progress websocket.
+- my-react-app: chat UI and admin surface.
+- redis: Celery broker and lightweight cache/history store.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
-- **Docker** & **Docker Compose**
-- **Node.js** & **npm** (for the frontend)
-- At least **4GB to 8GB of RAM allocated to Docker** (Crucial: Ranker loads PyTorch NLP models!).
 
-### 1. Backend Setup
+- Docker + Docker Compose
+- Node.js 18+ and npm
+- 4-8 GB RAM available for Docker (ranker models are memory-heavy)
 
-1. Copy the environment variables template and configure your API keys:
-   ```bash
-   cp .env.example .env
-   ```
-2. Open `.env` and add your **`GEMINI_API_KEY`**.
-3. Spin up the backend microservices using Docker Compose:
-   ```bash
-   docker compose build
-   docker compose up -d
-   ```
-4. Verify all containers are running smoothly without restarting:
-   ```bash
-   docker compose logs -f
-   ```
+### 1) Start backend services
 
-### 2. Frontend Setup
+```bash
+cp .env.example .env
+# Fill required values in .env (at minimum GEMINI_API_KEY and DB variables)
 
-1. Open a new terminal and navigate to the React app:
-   ```bash
-   cd my-react-app
-   ```
-2. Install the necessary Node modules:
-   ```bash
-   npm install
-   ```
-3. Start the development server:
-   ```bash
-   npm run dev
-   ```
+docker compose build
+docker compose up -d
+docker compose ps
+```
 
----
+### 2) Start frontend
 
-## 🖥️ Accessing the Application
+```bash
+cd my-react-app
+npm install
+npm run dev
+```
 
-Once everything is booted, you can access the different interfaces:
+## Frontend Environment Variables
 
-- **💬 Chat Interface (Main App):** [http://localhost:5173/chat](http://localhost:5173/chat)
-- **⚙️ ETL Admin Dashboard:** [http://localhost:5173/admin](http://localhost:5173/admin)
-- **🚪 Gateway API Docs (Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)
+Create my-react-app/.env with:
 
----
+```env
+VITE_API_URL=http://localhost:8000
+VITE_WS_URL=ws://localhost:8000
+```
 
-## 🔧 Managing and Developing
+## Main API Surface (Gateway)
 
-### Stopping the Services
-To stop the backend microservices, run:
+- GET /health
+- GET /services/health
+- POST /auth/register
+- POST /auth/login
+- POST /auth/admin/login
+- WS /ws/chat/{user_id}?token=<jwt>
+- POST /search
+- WS /ws/status/{task_id}
+- POST /scrape/launch (admin token required)
+- POST /scrape/pause (admin token required)
+- POST /scrape/resume (admin token required)
+- POST /scrape/stop (admin token required)
+- GET /scrape/status (admin token required)
+- WS /websocket_progress
+
+OpenAPI docs: http://localhost:8000/docs
+
+## Repository Structure
+
+- gateway_node/: API gateway + auth + proxying.
+- ranker_node/: hybrid search pipeline, async ranking task handling.
+- scraper_node/: scraper orchestration and ETL controls.
+- my-react-app/: React frontend.
+- docker-compose.yml: complete local stack.
+
+## Operational Notes
+
+- Ranker and scraper async workers rely on Redis health.
+- Ranker startup can be slow on first run due to model downloads.
+- If workers are killed with SIGKILL, increase Docker memory.
+
+## Development
+
+Backend logs:
+
+```bash
+docker compose logs -f gateway ranker scraper celery_worker scraper_worker
+```
+
+Stop services:
+
 ```bash
 docker compose downproffisional
 ```
-To wipe data (including the Redis cache), run:
+
+Stop and remove volumes:
+
 ```bash
 docker compose down -v
 ```
-
-### Important Notes on NLP Memory
-The Ranker's `celery_worker` container dynamically loads models like **all-MiniLM-L6-v2** (SentenceTransformers) and **GLiNER**. 
-If you see the `celery_worker` exiting with `Signal 9 (SIGKILL)`, it means Docker ran out of memory. 
-Ensure Docker Desktop or your Docker Engine is configured with adequate RAM.
-
-## 🤝 Contributing
-1. Create a feature branch
-2. Make your changes and test locally
-3. Submit a pull request

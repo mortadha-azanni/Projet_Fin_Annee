@@ -1,72 +1,92 @@
 # Ranker Node
 
-Ranking and scoring microservice for processing and ordering data.
+Ranker Node exposes async search orchestration and task-status streaming.
 
-## Features
+## What It Does
 
-- Rank items based on various criteria
-- Sort and filter results
-- Scoring algorithms
-- Future: ML-based ranking, personalization
+- Accepts user search queries and schedules Celery tasks.
+- Streams task lifecycle updates over WebSocket.
+- Returns final ranked results and generated markdown response.
+- Provides a helper endpoint to format ranked products into markdown.
 
-## Endpoints
+## Runtime Architecture
 
-### `GET /`
-Service information
+- FastAPI app in main.py handles API and websocket traffic.
+- Celery worker (celery_app.py) executes Search.perform_search tasks.
+- Redis is used as broker/result backend for Celery task state.
 
-### `GET /health`
-Health check endpoint
+## API Endpoints
 
-### `POST /rank`
-Rank a list of items
+### GET /
+Returns service metadata.
 
-**Request Body:**
-```json
-[
-  {"title": "Item 1", "score": 10},
-  {"title": "Item 2", "score": 5}
-]
-```
+### GET /health
+Returns basic health status.
 
-**Response:**
+### POST /search
+Starts a background search task.
+
+Request body:
+
 ```json
 {
-  "message": "Ranking functionality to be implemented",
-  "ranked_items": [
-    {"title": "Item 1", "score": 10},
-    {"title": "Item 2", "score": 5}
-  ]
+  "query": "gaming laptop 16gb ram"
 }
 ```
 
-## TODO: Implement Ranking Logic
+Response:
 
-### Simple Ranking Strategies
-- Sort by score/relevance
-- Filter by threshold
-- Boost recent items
-- Keyword matching
+```json
+{
+  "task_id": "<celery-task-id>",
+  "message": "Search task started"
+}
+```
 
-### Advanced Strategies
-- Machine learning models
-- Collaborative filtering
-- Content-based filtering
-- Hybrid approaches
+### WS /ws/status/{task_id}
+Streams task state updates until completion.
 
-## Dependencies
+Success payload includes:
 
-- `fastapi` - Web framework
-- `uvicorn` - ASGI server
-- Future: `scikit-learn`, `pandas`, `numpy` for ML-based ranking
+- state
+- status
+- results
+- final_response
+- cache_key
 
-## Development
+### POST /rank
+Formats already-ranked items into a markdown response using LLM.FLLM.MarkdownDescription.
+
+## Local Development
+
+Install dependencies:
 
 ```bash
 uv sync
-uv run uvicorn main:app --reload --port 8002
 ```
 
-## Celery Worker
+Run API:
 
-The ranker service uses a Celery worker to run NLP tasks asynchronously. The `celery_worker` container is responsible for executing heavy background ML and computation tasks. Ensure the Redis messaging broker (often mapped to 6380 -> 6379) is running.
+```bash
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Run worker:
+
+```bash
+uv run celery -A celery_app worker --loglevel=info
+```
+
+## Docker Mapping in Root Compose
+
+- Container listens on 8000.
+- Exposed locally as port 8002.
+
+## Key Dependencies
+
+- fastapi, uvicorn
+- celery, redis
+- sentence-transformers, gliner
+- rank-bm25, pgvector, sqlalchemy
+- google-genai
 

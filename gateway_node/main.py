@@ -11,7 +11,7 @@ from routers.search import router as search_router
 from routers.admin import router as admin_router
 import httpx
 
-
+app = FastAPI(redirect_slashes=False)
 # ── Lifespan (startup / shutdown) ─────────────────────────────────────────────
 
 @asynccontextmanager

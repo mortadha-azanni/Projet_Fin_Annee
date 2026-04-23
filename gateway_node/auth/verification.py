@@ -23,18 +23,27 @@ TOKEN_EXPIRE = int(os.getenv("VERIFICATION_TOKEN_EXPIRE_HOURS", 24))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # ── SMTP (fastapi-mail) ───────────────────────────────────────────────────────
-mail_conf = ConnectionConfig(
-    MAIL_USERNAME   = os.getenv("SMTP_USERNAME"),
-    MAIL_PASSWORD   = os.getenv("SMTP_PASSWORD"),
-    MAIL_FROM       = os.getenv("SMTP_FROM", os.getenv("SMTP_USERNAME")),
-    MAIL_FROM_NAME  = os.getenv("MAIL_FROM_NAME", "My App"),
-    MAIL_PORT       = int(os.getenv("SMTP_PORT", 587)),
-    MAIL_SERVER     = os.getenv("SMTP_HOST", "smtp.gmail.com"),
-    MAIL_STARTTLS   = True,
-    MAIL_SSL_TLS    = False,
-    USE_CREDENTIALS = True,
-)
-fm = FastMail(mail_conf)
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME)
+MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "My App")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+
+fm = None
+if SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM:
+    mail_conf = ConnectionConfig(
+        MAIL_USERNAME=SMTP_USERNAME,
+        MAIL_PASSWORD=SMTP_PASSWORD,
+        MAIL_FROM=SMTP_FROM,
+        MAIL_FROM_NAME=MAIL_FROM_NAME,
+        MAIL_PORT=SMTP_PORT,
+        MAIL_SERVER=SMTP_HOST,
+        MAIL_STARTTLS=True,
+        MAIL_SSL_TLS=False,
+        USE_CREDENTIALS=True,
+    )
+    fm = FastMail(mail_conf)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -100,6 +109,12 @@ async def send_verification(
 
     if user["email_verified"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already verified.")
+
+    if fm is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email verification is not configured on this gateway instance.",
+        )
 
     token = _create_token(data.email)
     await conn.execute("UPDATE users SET verification_token = $1 WHERE email = $2", token, data.email)

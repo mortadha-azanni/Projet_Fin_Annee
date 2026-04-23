@@ -92,25 +92,25 @@ async def google_callback(
     user = await conn.fetchrow("SELECT id FROM users WHERE email = $1", email)
 
     if not user:
-        # New user — create account (no password since OAuth)
         user = await conn.fetchrow(
             """
-            INSERT INTO users (email, hashed_password, full_name, avatar_url, email_verified, google_id)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO users (email, full_name, avatar_url, email_verified, google_id)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id
             """,
-            email, None, full_name, avatar_url, email_verified, google_id,
+            email, full_name, avatar_url, email_verified, google_id,
         )
     else:
-        # Existing user — update google_id and email_verified if not set
         await conn.execute(
             """
             UPDATE users
-            SET google_id = $1, email_verified = $2
+            SET google_id = COALESCE(google_id, $1), email_verified = $2
             WHERE email = $3
             """,
             google_id, email_verified, email,
         )
+        # re-fetch to ensure we have the id after update
+        user = await conn.fetchrow("SELECT id FROM users WHERE email = $1", email)
 
     # 4. Generate JWT and redirect to frontend
     jwt_token = create_access_token({"id": str(user["id"]), "role": "user"})

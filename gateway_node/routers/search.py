@@ -115,7 +115,15 @@ async def status_websocket(
                             "content": data.get("content") or data.get("text", ""),
                         },
                     })
-
+                elif state in ("PROGRESS", "PENDING") or event_type == "status":
+                    status_text = data.get("status") or data.get("message") or "Processing..."
+                    await websocket.send_json({
+                        "type": "status",
+                        "payload": {
+                            "message_id": message_id,
+                            "status": status_text,
+                        },
+                    })
                 elif event_type == "products":
                     await websocket.send_json({
                         "type": "products",
@@ -125,7 +133,30 @@ async def status_websocket(
                         },
                     })
 
-                elif event_type == "end" or state == "SUCCESS":
+                elif state == "SUCCESS":
+                    if data.get("results"):
+                        await websocket.send_json({
+                            "type": "products",
+                            "payload": {
+                                "message_id": message_id,
+                                "items": data.get("results"),
+                            },
+                        })
+                    if data.get("final_response"):
+                        await websocket.send_json({
+                            "type": "chunk",
+                            "payload": {
+                                "message_id": message_id,
+                                "content": data.get("final_response"),
+                            },
+                        })
+                    await websocket.send_json({
+                        "type": "end",
+                        "payload": {"message_id": message_id},
+                    })
+                    break
+
+                elif event_type == "end":
                     await websocket.send_json({
                         "type": "end",
                         "payload": {"message_id": message_id},

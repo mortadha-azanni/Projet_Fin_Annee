@@ -7,7 +7,7 @@ genai = import_module("google.genai")
 class MarkdownDescription:
     def __init__(self, products: List[dict]) -> None:
         self.products = products
-        self.gemini_key = os.getenv("GEMINI_KEY")
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=self.gemini_key) if self.gemini_key else None
 
     def _format_products(self) -> str:
@@ -105,10 +105,11 @@ Now produce only the output (opening sentence + markdown list).
             return self._fallback_markdown()
 
         try:
-            response = self.client.generate_content(
+            response = self.client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt
             )
             return self._normalize_output_format(response.text or "")
-        except Exception:
+        except Exception as e:
+            print(f"[FLLM ERROR] {e}")
             return self._fallback_markdown()

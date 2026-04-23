@@ -92,3 +92,7 @@ async def get_me(
         "searches_this_month": usage["searches_this_month"] if usage else 0,
         "searches_limit": 50,
     }
+
+
+from .oauth import oauth_router
+router.include_router(oauth_router)

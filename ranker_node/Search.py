@@ -213,24 +213,32 @@ def perform_search(
     # Stage 2.5: Fetch products with hierarchical expansion
     if expand_to_children:
         print(f"\n[Fetching Products] Fetching ALL products in category tree {selected_category_id}")
-        fetch_func = getProductByCategoryTree
+        try:
+            product_docs = getProductByCategoryTree(
+                selected_category_id,
+                price_min=price_min,
+                price_max=price_max,
+                query_embedding=query_embedding,
+                limit=200,
+            )
+        except Exception as exc:
+            print(f"    [ERROR] Failed to fetch products: {exc}")
+            return {"error": f"Database fetch error: {exc}"}
     else:
         print(f"\n[Fetching Products] Fetching EXACT products for category {selected_category_id}")
-        fetch_func = getProductByCategory
-
-    try:
-        product_docs = fetch_func(
-            selected_category_id,
-            price_min=price_min,
-            price_max=price_max,
-            query_embedding=query_embedding,
-            limit=200,
-            location=hard_location,
-            filter_terms=hard_filter_terms,
-        )
-    except Exception as exc:
-        print(f"    [ERROR] Failed to fetch products: {exc}")
-        return {"error": f"Database fetch error: {exc}"}
+        try:
+            product_docs = getProductByCategory(  # type: ignore[call-arg]
+                selected_category_id,
+                price_min=price_min,
+                price_max=price_max,
+                query_embedding=query_embedding,
+                limit=200,
+                location=hard_location,
+                filter_terms=hard_filter_terms,
+            )
+        except Exception as exc:
+            print(f"    [ERROR] Failed to fetch products: {exc}")
+            return {"error": f"Database fetch error: {exc}"}
 
     # Fallback Relaxer: If no products, relax hard filters one by one
     if not product_docs:
@@ -247,7 +255,7 @@ def perform_search(
             # Adjust price_max if relaxing max_price
             adjusted_price_max = price_max if relaxed_max_price is not None else None
             try:
-                product_docs = getProductByCategory(
+                product_docs = getProductByCategory(  # type: ignore[call-arg]
                     selected_category_id,
                     price_min=price_min,
                     price_max=adjusted_price_max,
@@ -266,15 +274,24 @@ def perform_search(
         print(f"\n[Fallback] No products found with price range. Retrying without price constraints...")
         price_min, price_max = None, None
         try:
-            product_docs = fetch_func(
-                selected_category_id,
-                price_min=None,
-                price_max=None,
-                query_embedding=query_embedding,
-                limit=200,
-                location=hard_location,
-                filter_terms=hard_filter_terms,
-            )
+            if expand_to_children:
+                product_docs = getProductByCategoryTree(
+                    selected_category_id,
+                    price_min=None,
+                    price_max=None,
+                    query_embedding=query_embedding,
+                    limit=200,
+                )
+            else:
+                product_docs = getProductByCategory(  # type: ignore[call-arg]
+                    selected_category_id,
+                    price_min=None,
+                    price_max=None,
+                    query_embedding=query_embedding,
+                    limit=200,
+                    location=hard_location,
+                    filter_terms=hard_filter_terms,
+                )
         except Exception as exc:
             print(f"    [ERROR] Failed to fetch products: {exc}")
 
@@ -292,8 +309,6 @@ def perform_search(
                         price_max=None,
                         query_embedding=query_embedding,
                         limit=200,
-                        location=hard_location,
-                        filter_terms=hard_filter_terms,
                     )
                     if product_docs:
                         print(f"    [Fallback Success] Found {len(product_docs)} products in category tree {fallback_cat_id}")

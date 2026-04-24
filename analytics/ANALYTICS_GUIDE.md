@@ -15,29 +15,31 @@ presents product intelligence through a protected React dashboard.
 
 ### Tech Stack
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Data API | Cube.js 0.35 (official Docker image) |
 | Database | PostgreSQL (shared with main stack) |
 | Frontend | React 18 + Vite + Recharts |
 | Auth | Gateway JWT via `/auth/admin/login` |
-| Serving | Nginx (production build) |
+| Serving | Node + serve (production build) |
 | Orchestration | Docker Compose |
 
 ---
 
 ## Architecture
+```
 PostgreSQL
 │
 ▼
 Cube.js (port 4000)     ← reads DB, serves analytics API
 │
 ▼
-Dashboard (port 3001)   ← React app served via Nginx
+Dashboard (port 3001)   ← React app served via Node (serve)
 │
 ▼
 Admin Browser           ← protected by JWT login
-
+```
 ### Folder Structure
+```
 analytics/
 ├── docker-compose.yml        ← analytics-only compose, joins pfa-network
 ├── .env                      ← local env (not committed)
@@ -50,15 +52,14 @@ analytics/
 │       ├── cubes/            ← data models (Products, Categories, Users, rollups)
 │       └── views/            ← query views exposed to frontend
 └── dashboard/
-├── Dockerfile            ← multi-stage build (Vite → Nginx)
-├── nginx.conf            ← proxies /cubejs-api/ to Cube.js container
+├── Dockerfile            ← multi-stage build (Vite → serve)
 ├── package.json
 ├── vite.config.js
 └── src/
 ├── auth/             ← login page + useAuth hook
 ├── components/       ← all chart components + layout
 └── hooks/            ← useCubeQuery wrapper
-
+```
 ---
 
 ## Docker Guide
@@ -114,7 +115,7 @@ Analytics stack (Projet_Fin_Annee/analytics/docker compose up -d)
 Never start analytics alone — it needs pfa-network which is created by the main stack.
 
 Environment Variables
-VariableDescriptionDB_HOSTPostgreSQL host (same as root .env)DB_PORTPostgreSQL portDB_NAMEDatabase nameDB_USERDatabase userDB_PASSWORDDatabase passwordCUBEJS_API_SECRETSecret key for signing Cube.js JWT tokens
+VariableDescriptionDB_HOSTPostgreSQL host (same as root .env)DB_PORTPostgreSQL portDB_NAMEDatabase nameDB_USERDatabase userDB_PASSWORDDatabase passwordCUBEJS_API_SECRETSecret key for signing Cube.js JWT tokensVITE_CUBEJS_API_URLCube.js API base URL for the dashboard
 
 Troubleshooting
 network pfa-network not found

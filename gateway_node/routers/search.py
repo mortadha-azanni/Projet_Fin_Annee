@@ -5,7 +5,8 @@ import json
 import uuid
 import asyncio
 import re
-import hashlib, Any
+import hashlib
+from typing import Any
 from core.config import settings
 from auth.dependencies import get_current_user
 from auth.models import TokenData
@@ -51,6 +52,51 @@ def heuristic_classify_intent(message: str) -> dict[str, Any]:
         "source": "heuristic",
         "reason": "No strong shopping keyword signal",
     }
+
+
+def _semantic_cache_key(query_text: str, constraints: dict) -> str:
+    normalized_query = (query_text or "").strip().lower()
+    normalized_constraints = json.dumps(constraints or {}, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(f"{normalized_query}|{normalized_constraints}".encode("utf-8")).hexdigest()
+    return f"semantic_cache:{digest}"
+
+
+async def send_cached_reply(user_id: str, task_id: str, cache_payload: dict) -> None:
+    """Background task to publish a fast cached response over WS events."""
+    redis_conn = get_redis()
+    channel = f"client-events:{user_id}"
+
+    items = (cache_payload.get("results") or [])[:5]
+    final_response = cache_payload.get("final_response") or "Here are previously cached results for your request."
+
+    msgs = [
+        {"type": "status", "task_id": task_id, "payload": {"status": "Cache hit. Returning results..."}},
+        {"type": "products", "task_id": task_id, "payload": {"items": items}},
+        {"type": "chunk", "task_id": task_id, "payload": {"content": final_response}},
+        {"type": "end", "task_id": task_id, "payload": {}},
+    ]
+
+    for msg in msgs:
+        await redis_conn.publish(channel, json.dumps(msg))
+        await asyncio.sleep(0.1)
+
+
+async def send_direct_reply(user_id: str, task_id: str, reply_text: str) -> None:
+    """Background task to send a rapid direct reply bypassing ranker."""
+    redis_conn = get_redis()
+    channel = f"client-events:{user_id}"
+
+    await asyncio.sleep(0.5)
+
+    msgs = [
+        {"type": "status", "task_id": task_id, "payload": {"status": "Thinking..."}},
+        {"type": "chunk", "task_id": task_id, "payload": {"content": reply_text}},
+        {"type": "end", "task_id": task_id, "payload": {}},
+    ]
+
+    for msg in msgs:
+        await redis_conn.publish(channel, json.dumps(msg))
+        await asyncio.sleep(0.2)
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
@@ -295,7 +341,7 @@ async def search(
 
 
 @router.post("/intent/classify")
-async def classify_intent(query_data: IntentQuery):
+async def classify_intent_endpoint(query_data: IntentQuery):
     user_message = query_data.message.strip()
     if not user_message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")

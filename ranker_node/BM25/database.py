@@ -151,7 +151,16 @@ def getAncestorIds(category_id: int) -> list[int]:
         return [row[0] for row in result]
 
 
-def getProductByCategoryTree(category_id: int, price_min=None, price_max=None, query_embedding=None, limit=200):
+def getProductByCategoryTree(
+    category_id: int,
+    price_min=None,
+    price_max=None,
+    query_embedding=None,
+    limit=200,
+    location=None,
+    filter_terms=None,
+    **_kwargs,
+):
     """Fetch products from category AND all subcategories using ltree.
 
     Args:
@@ -183,6 +192,16 @@ def getProductByCategoryTree(category_id: int, price_min=None, price_max=None, q
         if price_max is not None:
             query += " AND p.price <= :price_max"
             params["price_max"] = price_max
+
+        if location:
+            query += " AND (p.description ILIKE :location OR p.dictionary ILIKE :location)"
+            params["location"] = f"%{location}%"
+
+        if filter_terms:
+            for idx, term in enumerate(filter_terms):
+                param_key = f"filter_term_{idx}"
+                query += f" AND (p.description ILIKE :{param_key} OR p.dictionary ILIKE :{param_key})"
+                params[param_key] = f"%{term}%"
 
         if query_embedding is not None:
             import json

@@ -25,20 +25,21 @@ services:
       - pfa-network
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      args:
+        VITE_CUBEJS_API_URL: ${VITE_CUBEJS_API_URL:-http://localhost:4000/cubejs-api/v1}
+        VITE_CUBEJS_TOKEN: ${CUBEJS_API_SECRET}
     container_name: analytics_dashboard
     ports:
-      - "3001:80"
+      - "3001:3001"
     restart: unless-stopped
     depends_on:
       - cubejs
-    environment:
-      VITE_CUBEJS_API_URL: http://localhost:4000/cubejs-api/v1
-      VITE_CUBEJS_TOKEN: ${CUBEJS_API_SECRET}
     networks:
       - pfa-network
 
 networks:
   pfa-network:
     external: true
-    name: projet_fin_annee_pfa-network
+    name: pfa-network

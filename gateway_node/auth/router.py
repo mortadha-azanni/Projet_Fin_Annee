@@ -67,13 +67,13 @@ async def get_me(
     with real user data instead of hardcoded placeholders.
     """
     user = await conn.fetchrow(
-        "SELECT id, email, full_name, avatar_url, role FROM users WHERE id = $1",
+        "SELECT id, email, full_name, avatar_url, 'user' AS role, email_verified FROM users WHERE id = $1",
         current_user.id,
     )
     if not user:
         # Fall back to admins table
         user = await conn.fetchrow(
-            "SELECT id, email, full_name, avatar_url, 'admin' AS role FROM admins WHERE id = $1",
+            "SELECT id, email, full_name, avatar_url, 'admin' AS role, TRUE AS email_verified FROM admins WHERE id = $1",
             current_user.id,
         )
     if not user:
@@ -90,6 +90,7 @@ async def get_me(
         "name": user["full_name"] or "User",
         "email": user["email"],
         "role": user["role"],
+        "email_verified": user["email_verified"],
         "plan": "free",
         "searches_this_month": usage["searches_this_month"] if usage else 0,
         "searches_limit": 50,

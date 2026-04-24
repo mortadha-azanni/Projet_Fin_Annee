@@ -86,6 +86,12 @@ async def proxy_scraping_status(admin: TokenData = Depends(get_current_admin)):
     return await _scraper_get("/scrape/status")
 
 
+@router.get("/db-count")
+async def proxy_database_count():
+    """GET /scrape/db-count — Proxy scraper database count endpoint."""
+    return await _scraper_get("/scrape/db-count")
+
+
 # ── ETL log WebSocket (admin only) ───────────────────────────────────────────
 
 @router.websocket("/progress")

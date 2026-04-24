@@ -23,6 +23,96 @@ def normalizeBrand(value: str | None) -> str | None:
     return normalized.title()
 
 
+def _extract_url_keywords(url: str) -> list[str]:
+    """Extract searchable keywords from category URL."""
+    if not url:
+        return []
+    
+    parts = []
+    
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    path = parsed.path if parsed.path else url
+    
+    path = path.lower()
+    path = path.replace(".html", "").replace(".tn", "").replace("-", " ").replace("/", " ")
+    
+    url_keyword_expansions = {
+        "pc portable": "laptop ordinateur portable notebook ultrabook",
+        "pc de bureau": "desktop ordinateur fixe tour",
+        "pc tout en un": "all in one aio",
+        "carte graphique": "gpu graphics",
+        "carte mere": "motherboard主板",
+        "processeur": "cpu processor",
+        "barrette memoire": "ram memory",
+        "disque dur": "hdd hard drive",
+        "disque ssd": "ssd nvme",
+        "televiseur": "tv television",
+        "telephone": "smartphone mobile phone",
+        "casque ecouteur": "headphone headset audio",
+        "imprimante": "printer",
+        "gamer gaming": "game player",
+    }
+    
+    for key, expansion in url_keyword_expansions.items():
+        if key in path:
+            parts.extend(expansion.split())
+    
+    parts.extend(path.split())
+    
+    return [p for p in parts if len(p) > 1]
+
+
+def build_bm25_dictionary(product: dict, category_path: str = "") -> str:
+    """Build BM25-searchable text string from product fields + category context."""
+    parts = []
+    
+    if product.get("brand"):
+        parts.append(product["brand"].lower())
+    
+    if category_path:
+        path_keywords = category_path.lower().replace(".", " ").replace("-", " ").replace("_", " ")
+        parts.append(path_keywords)
+        for level in category_path.split("."):
+            parts.append(level.lower().replace("_", " ").strip())
+    
+    url_keywords = _extract_url_keywords(product.get("source_category_url", ""))
+    parts.extend(url_keywords)
+    
+    if product.get("name"):
+        name = product["name"].lower()
+        parts.append(name)
+        
+        for ram in re.findall(r"(\d+)\s*Go", name, re.IGNORECASE):
+            parts.append(f"{ram}go")
+        
+        for size, unit in re.findall(r"(\d+)\s*(Go|To)", name, re.IGNORECASE):
+            parts.append(f"{size}{unit.lower()}")
+        
+        for screen in re.findall(r"(\d+\.?\d*)\s*pouces?", name, re.IGNORECASE):
+            parts.append(f'{screen}"')
+            parts.append(f"{screen}inch")
+        
+        keywords = ["ssd", "hdd", "nvme", "rgb", "wifi", "bluetooth", "hdmi", "usb",
+                    "i3", "i5", "i7", "i9", "m1", "m2", "m3", "m4", "ryzen", "ryzen 5", "ryzen 7", "ryzen 9", "core",
+                    "windows", "macos", "linux", "android", "ios", "chrome",
+                    "gaming", "gamer", "pro", "ultra", "max",
+                    "portable", "notebook", "ultrabook", "macbook", "thinkpad", "latitude", "elitebook",
+                    "predator", "legion", "omen", "rog", "strix", "nitro", "tuf",
+                    "air", "pro", "max", "mini", "plus", "plus pro",
+                    "touch", "tactile", "finger", "stylet",
+                    "bluetooth", "wireless", "cable",
+                    "led", "rgb", "backlit",
+                    "mechanical", "membrane",
+                    "720p", "1080p", "1440p", "4k", "5k", "8k", "60hz", "144hz", "240hz",
+                    "webcam", "camera", "mic", "microphone"]
+        for kw in keywords:
+            if kw in name:
+                parts.append(kw)
+    
+    return " ".join(dict.fromkeys(parts))
+
+
 @dataclass
 class ProductRecord:
     name: str | None

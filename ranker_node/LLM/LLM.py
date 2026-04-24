@@ -21,6 +21,7 @@ class GeminiResponseSchema(BaseModel):
     negative_keywords: List[str] = Field(..., description="List of negative keywords to exclude")
     price: PriceConstraints
     selected_category_id: Optional[int] = Field(None, description="The strictly chosen category ID")
+    expand_to_children: bool = Field(False, description="Whether to include all child categories under selected_category_id")
 
 genai = import_module("google.genai")
 client = genai.Client(api_key=API_KEY) if API_KEY else None
@@ -29,6 +30,14 @@ default_prompt = """You are an expert e-commerce search expansion AI. Your task 
 You will be provided with the user's original query, extracted entities (brands/specs), extracted price constraints, and technical dictionary snippets for the top 3 most relevant product categories.
 
 Using this information, you must perform a "HyDE" (Hypothetical Document Embeddings) generation. Write a hypothetical, 2-sentence technical description of the perfect product for this user, strictly using the provided category attributes.
+
+### CATEGORY HIERARCHY ###
+Categories have hierarchical paths like: "informatique.ordinateurs.pc-portable"
+- Use parent categories to include ALL their children
+- Use specific categories for exact matches
+- Examples:
+  * Select category 11 (ordinateurs) with expand_to_children=true → ALL computers/laptops/desktops
+  * Select category 111 (pc-portable) with expand_to_children=false → ONLY laptops
 
 ### INPUT DATA ###
 Original User Query: 
@@ -40,30 +49,27 @@ Extracted NER Entities (Brands/Specs):
 Extracted Price Constraints:
 {price_constraints}
 
-Expanded Dictionary Snippets (Top 3 Category Paths):
+Category Dictionary Snippets (Top 3 with ID and Path):
 {category_dictionaries}
 
 ### INSTRUCTIONS ###
-1. Analyze the user query and extracted entities to understand the core intent.
-2. Cross-reference this intent with the provided Expanded Dictionary Snippets to identify the correct technical terminology, synonyms, and specifications.
-3. Generate a 2-sentence hypothetical product description (`semantic_blob`) that perfectly matches the user's intent using strict technical attributes. 
-4. Extract a list of highly relevant technical keywords and synonyms (`bm25_keywords`).
-5. Identify terms that might cause false positives and should be excluded (`negative_keywords`).
-6. Analyze the extracted price constraints and format them into a minimum and maximum numerical value. Use `null` if a bound is not specified.
-7. Select the single most relevant category ID from the provided Expanded Dictionary Snippets that best matches the user's intent.
+1. Analyze the user query to understand if they want BROAD or SPECIFIC products.
+   - "laptop", "computer", "electronics" → broad → select parent category, expand_to_children=true
+   - "MacBook Pro", "gaming laptop", "specific model" → specific → select specific category, expand_to_children=false
+2. Select the most relevant category ID.
+3. Set expand_to_children=true if user wants ANY product in that category tree (e.g., "show me all laptops").
+4. Set expand_to_children=false if user wants EXACT match (e.g., "MacBook Air only").
 
 ### OUTPUT FORMAT ###
-You must output your response STRICTLY as a valid JSON object matching the following structure. Do not include markdown formatting, explanations, or any text outside the JSON object.
+Return valid JSON:
 
 {{
-  "semantic_blob": "A 2-sentence technical description of the perfect product for this user, strictly using the provided category attributes.",
-  "bm25_keywords": ["keyword1", "synonym1", "tech_spec1", "attribute1"],
-  "negative_keywords": ["conflicting_term1", "irrelevant_category1"],
-  "price": {{
-    "min_price": 100,
-    "max_price": 500
-  }},
-  "selected_category_id": 123
+  "semantic_blob": "A 2-sentence technical description...",
+  "bm25_keywords": ["keyword1", "synonym1"],
+  "negative_keywords": ["conflicting_term1"],
+  "price": {{"min_price": 100, "max_price": 500}},
+  "selected_category_id": 11,
+  "expand_to_children": true
 }}
 """
 
@@ -118,5 +124,6 @@ def query_gemini(user_query: str, ner_entities: List[str], category_dictionaries
                 "min_price": None,
                 "max_price": None
             },
-            "selected_category_id": None
+            "selected_category_id": None,
+            "expand_to_children": False
         }

@@ -15,7 +15,16 @@ services:
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-only-change-this-jwt-secret-key-1234567890}
+      - SECRET_KEY=${SECRET_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Searchily}
+      - VERIFICATION_TOKEN_EXPIRE_HOURS=${VERIFICATION_TOKEN_EXPIRE_HOURS:-24}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173/SEARCHILY_FrontEnd}
       - PYTHONUNBUFFERED=1
       - UV_LINK_MODE=hardlink
     env_file:

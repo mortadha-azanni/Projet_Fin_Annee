@@ -4,6 +4,7 @@
 
 import os
 import secrets
+import logging
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
@@ -15,9 +16,10 @@ from core.database import get_db
 from .models import SendVerificationRequest
 
 verification_router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # ── Token settings ────────────────────────────────────────────────────────────
-SECRET_KEY   = os.getenv("SECRET_KEY", "change-me")
+SECRET_KEY   = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET_KEY", "change-me")
 ALGORITHM    = "HS256"
 TOKEN_EXPIRE = int(os.getenv("VERIFICATION_TOKEN_EXPIRE_HOURS", 24))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -44,6 +46,18 @@ if SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM:
         USE_CREDENTIALS=True,
     )
     fm = FastMail(mail_conf)
+    logger.info("Email verification enabled (SMTP host=%s, port=%s, from=%s)", SMTP_HOST, SMTP_PORT, SMTP_FROM)
+else:
+    missing = [
+        name
+        for name, value in {
+            "SMTP_USERNAME": SMTP_USERNAME,
+            "SMTP_PASSWORD": SMTP_PASSWORD,
+            "SMTP_FROM": SMTP_FROM,
+        }.items()
+        if not value
+    ]
+    logger.warning("Email verification disabled: missing SMTP config: %s", ", ".join(missing))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

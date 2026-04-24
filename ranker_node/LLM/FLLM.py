@@ -3,10 +3,12 @@ from importlib import import_module
 from typing import List
 
 genai = import_module("google.genai")
+from core.sanitization import sanitize_text, sanitize_html  # type: ignore[import-not-found]
 
 class MarkdownDescription:
-    def __init__(self, products: List[dict]) -> None:
+    def __init__(self, products: List[dict], intent: str = "search") -> None:
         self.products = products
+        self.intent = intent
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=self.gemini_key) if self.gemini_key else None
 
@@ -28,8 +30,8 @@ class MarkdownDescription:
             "",
         ]
         for i, product in enumerate(self.products, 1):
-            name = product.get("name") or product.get("title") or f"Product {i}"
-            description = product.get("description", "No description provided")
+            name = sanitize_text(product.get("name") or product.get("title") or f"Product {i}", 100)
+            description = sanitize_text(product.get("description", "No description provided"), 500)
             price = product.get("price", "N/A")
             sections.extend([
                 f"## Rank {i} – {name}",
@@ -44,13 +46,25 @@ class MarkdownDescription:
         if not text:
             return self._fallback_markdown()
 
+        # Sanitize the generated text to prevent XSS
+        text = sanitize_html(text, 10000)
+
         if "| Rank |" not in text:
             return text
 
         return self._fallback_markdown()
 
     def generate(self) -> str:
-        """Generate a markdown description for the 5 products."""
+        """Generate a markdown description for the products based on intent."""
+        if self.intent == "comparison":
+            return self._generate_comparison_table()
+        elif self.intent == "constrained":
+            return self._generate_constrained_list()
+        else:
+            return self._generate_standard_list()
+
+    def _generate_standard_list(self) -> str:
+        """Generate standard ranked list."""
         products_text = self._format_products()
         prompt = f"""
 You are an expert e‑commerce copywriter and product analyst.  
@@ -113,3 +127,36 @@ Now produce only the output (opening sentence + markdown list).
         except Exception as e:
             print(f"[FLLM ERROR] {e}")
             return self._fallback_markdown()
+
+    def _generate_comparison_table(self) -> str:
+        """Generate comparison table for comparison intent."""
+        if not self.products:
+            return "No products to compare."
+        
+        # Create a markdown table
+        header = "| Feature | " + " | ".join([f"Product {i+1}" for i in range(len(self.products))]) + " |"
+        separator = "|" + "|".join(["---"] * (len(self.products) + 1)) + "|"
+        
+        rows = []
+        # Price row
+        price_row = "| Price | " + " | ".join([f"${p.get('price', 'N/A')}" for p in self.products]) + " |"
+        rows.append(price_row)
+        
+        # Description row (truncated)
+        desc_row = "| Description | " + " | ".join([p.get('description', 'N/A')[:50] + "..." for p in self.products]) + " |"
+        rows.append(desc_row)
+        
+        table = "\n".join([header, separator] + rows)
+        return f"Here's a comparison of the top products:\n\n{table}"
+
+    def _generate_constrained_list(self) -> str:
+        """Generate short constrained list."""
+        if not self.products:
+            return "No products found matching your constraints."
+        
+        lines = ["Here are the top products that match your specific requirements:"]
+        for i, product in enumerate(self.products, 1):
+            desc = product.get('description', 'No description')[:100]
+            price = product.get('price', 'N/A')
+            lines.append(f"{i}. {desc} - ${price}")
+        return "\n".join(lines)

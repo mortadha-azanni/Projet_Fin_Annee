@@ -1,6 +1,6 @@
 import os
 import sys
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore[import-not-found]
 from pydantic import field_validator
 
 
@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     DB_USER: str = "postgres"
     DB_PASSWORD: str  # Required — no insecure default
     DB_SSL: str = "prefer"
+    DB_SSLMODE: str | None = None
 
     # ── Redis ────────────────────────────────────────────────────────
     REDIS_HOST: str = "localhost"
@@ -46,6 +47,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
+    # ── External APIs ────────────────────────────────────────────────
+    GEMINI_API_KEY: str | None = None
+
     # ── Derived helpers ──────────────────────────────────────────────
     @property
     def cors_origins_list(self) -> list[str]:
@@ -57,6 +61,10 @@ class Settings(BaseSettings):
             f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         )
+
+    @property
+    def db_ssl_effective(self) -> str:
+        return self.DB_SSLMODE or self.DB_SSL
 
     @property
     def scraper_ws_url(self) -> str:

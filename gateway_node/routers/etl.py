@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, WebSocket, Query
 import httpx
-import websockets
 import logging
+import websockets
 from core.config import settings
 from auth.dependencies import get_current_admin
 from auth.models import TokenData
@@ -12,27 +12,11 @@ logger = logging.getLogger(__name__)
 
 # ── HTTP proxy helpers ────────────────────────────────────────────────────────
 
-async def _scraper_post(path: str) -> dict:
-    """POST to scraper and bubble up errors cleanly."""
+async def _scraper_request(method: str, path: str) -> dict:
+    """Call scraper and bubble up errors cleanly."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(f"{settings.SCRAPER_URL}{path}")
-            response.raise_for_status()
-            return response.json()
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Scraper error: {e.response.text}",
-        )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Scraper unreachable: {str(e)}")
-
-
-async def _scraper_get(path: str) -> dict:
-    """GET from scraper and bubble up errors cleanly."""
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{settings.SCRAPER_URL}{path}")
+            response = await client.request(method, f"{settings.SCRAPER_URL}{path}")
             response.raise_for_status()
             return response.json()
     except httpx.HTTPStatusError as e:
@@ -49,25 +33,25 @@ async def _scraper_get(path: str) -> dict:
 @router.post("/launch")
 async def launch_scraping(admin: TokenData = Depends(get_current_admin)):
     """POST /scrape/launch — Start the scraper. Contract §3A."""
-    return await _scraper_post("/scrape/launch")
+    return await _scraper_request("POST", "/scrape/launch")
 
 
 @router.post("/pause")
 async def pause_scraping(admin: TokenData = Depends(get_current_admin)):
     """POST /scrape/pause — Pause the scraper. Contract §3A."""
-    return await _scraper_post("/scrape/pause")
+    return await _scraper_request("POST", "/scrape/pause")
 
 
 @router.post("/resume")
 async def resume_scraping(admin: TokenData = Depends(get_current_admin)):
     """POST /scrape/resume — Resume the scraper. Contract §3A."""
-    return await _scraper_post("/scrape/resume")
+    return await _scraper_request("POST", "/scrape/resume")
 
 
 @router.post("/stop")
 async def stop_scraping(admin: TokenData = Depends(get_current_admin)):
     """POST /scrape/stop — Stop the scraper. Contract §3A."""
-    return await _scraper_post("/scrape/stop")
+    return await _scraper_request("POST", "/scrape/stop")
 
 
 @router.get("/status")
@@ -83,7 +67,7 @@ async def proxy_scraping_status(admin: TokenData = Depends(get_current_admin)):
       "pipeline_health": "Healthy"
     }
     """
-    return await _scraper_get("/scrape/status")
+    return await _scraper_request("GET", "/scrape/status")
 
 
 @router.get("/db-count")
@@ -125,6 +109,8 @@ async def proxy_websocket_progress(
         async with websockets.connect(scraper_ws_uri) as scraper_ws:
             while True:
                 message = await scraper_ws.recv()
+                if isinstance(message, bytes):
+                    message = message.decode("utf-8", errors="ignore")
                 await websocket.send_text(message)
 
     except websockets.exceptions.ConnectionClosed:

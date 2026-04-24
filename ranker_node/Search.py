@@ -9,23 +9,42 @@ from NER.entity_extractor import EntityExtractor
 from NER.utils import normalize
 from LLM.LLM import query_gemini
 from LLM.FLLM import MarkdownDescription
-from celery_app import celery_app
+from celery_app import celery_app, pubsub_redis
+import json
+from typing import Any, Dict, Optional
+from core.sanitization import sanitize_text, validate_and_sanitize_input
 
 
-_SMALL_TALK_PHRASES = {
-    "hi",
-    "hello",
-    "hey",
-    "yo",
-    "bonjour",
-    "salut",
-    "thanks",
-    "thank you",
-    "sup",
-    "what now",
-    "now what",
-}
-
+def push_event(task, task_state, status_msg, user_id=None, extra_payload=None):
+    if task:
+        task.update_state(state=task_state, meta={"status": status_msg})
+        
+    if user_id and task:
+        task_id = task.request.id
+        channel = f"client-events:{user_id}"
+        
+        event_type = "status"
+        if task_state == "FAILURE":
+            event_type = "error"
+            
+        payload = {
+            "type": event_type,
+            "task_id": task_id,
+            "payload": {
+                "status": status_msg
+            }
+        }
+        
+        if task_state == "FAILURE":
+            payload["payload"] = {"message": status_msg}
+            
+        if extra_payload:
+            payload.update(extra_payload)
+            
+        try:
+            pubsub_redis.publish(channel, json.dumps(payload, default=str))
+        except Exception as e:
+            print(f"[Redis Publish Error] {e}")
 
 def _normalize_query_text(query: str) -> str:
     lowered = (query or "").strip().lower()
@@ -35,17 +54,6 @@ def _normalize_query_text(query: str) -> str:
     punctuation = ",.!?;:-_()[]{}'\""
     cleaned = lowered.translate(str.maketrans("", "", punctuation))
     return " ".join(cleaned.split())
-
-
-def _is_product_search_query(query: str) -> bool:
-    normalized = _normalize_query_text(query)
-    if len(normalized) < 3:
-        return False
-
-    if normalized in _SMALL_TALK_PHRASES:
-        return False
-
-    return True
 
 
 def _strip_embedding(document: dict) -> dict:
@@ -66,15 +74,30 @@ def _sanitize_ranked_results(results: list[dict]) -> list[dict]:
     return sanitized
 
 @celery_app.task(bind=True)
-def perform_search(self, user_query_str: str):
-    cleaned_query = (user_query_str or "").strip()
+def perform_search(
+    self,
+    user_query_str: str,
+    user_id: Optional[str] = None,
+    intent: Optional[str] = None,
+    constraints: Optional[Dict[str, Any]] = None,
+    semantic_cache_key: Optional[str] = None,
+):
+    # Sanitize input parameters
+    user_query_str = sanitize_text(user_query_str, 500) if user_query_str else ""
+    user_id = sanitize_text(user_id, 100) if user_id else None
+    intent = sanitize_text(intent, 50) if intent else "search"
+    constraints = validate_and_sanitize_input(constraints) if constraints else {}
+    semantic_cache_key = sanitize_text(semantic_cache_key, 200) if semantic_cache_key else None
 
-    if not _is_product_search_query(cleaned_query):
+    constraints = constraints or {}
+
+    # Intent routing was already handled by Gateway's Classifier.
+    # If the gateway explicitly sent us a "chitchat" or "ambiguous" fallback by mistake, handle it gracefully.
+    if intent in ("chitchat", "clarify", "ambiguous"):
         if self:
-            self.update_state(
-                state='PROGRESS',
-                meta={'status': 'I can help with product searches. Tell me what item, brand, or budget you want.'}
-            )
+            push_event(self, 'PROGRESS', 'I can help with product searches. Tell me what item, brand, or budget you want.', user_id)
+        push_event(self, 'SUCCESS', 'Search Complete', user_id, extra_payload={'type': 'chunk', 'payload': {'content': 'I can help with product searches. Tell me what item, brand, or budget you want, and I’ll look it up.'}})
+        push_event(self, 'SUCCESS', 'Search Complete', user_id, extra_payload={'type': 'end'})
         return {
             "results": [],
             "final_response": "I can help with product searches. Tell me what item, brand, or budget you want, and I’ll look it up.",
@@ -86,13 +109,13 @@ def perform_search(self, user_query_str: str):
     # Query Normalization & Expansion
     # ============================================================================
     if self:
-        self.update_state(state='PROGRESS', meta={'status': 'Normalizing query and extracting entities...'})
+        push_event(self, 'PROGRESS', 'Normalizing query and extracting entities...', user_id)
     
     extractor = EntityExtractor()
     normalized_query = extractor.extract(user_query_str)
     
     if self:
-        self.update_state(state='PROGRESS', meta={'status': 'Fetching and ranking categories...'})
+        push_event(self, 'PROGRESS', 'Fetching and ranking categories...', user_id)
 
     # ============================================================================
     # MAIN SEARCH LOGIC
@@ -130,7 +153,16 @@ def perform_search(self, user_query_str: str):
 
     # Stage 2.25: LLM Call for the top category and the price range (if founded)
     ner_entities = normalized_query.get("brand", []) + normalized_query.get("model", []) + normalized_query.get("spec", [])
-    price_constraints = normalized_query.get("price", [])
+    hard_max_price = constraints.get("max_price")
+    hard_location = constraints.get("location")
+    hard_filter_terms = constraints.get("filters") or []
+    
+    # Merge Gateway global intent constraints with local Ranked extraction
+    extracted_prices = normalized_query.get("price", [])
+    if constraints and constraints.get("max_price"):
+        extracted_prices.append(f"Under {constraints['max_price']}")
+    
+    price_constraints = extracted_prices
 
     category_snippets = [
         f"ID: {res['document']['category_id']} | Path: {res['document']['path']}" 
@@ -139,7 +171,7 @@ def perform_search(self, user_query_str: str):
 
     print("\n[LLM] Querying Gemini to parse prices and select the strongest category...")
     if self:
-        self.update_state(state='PROGRESS', meta={'status': 'Consulting LLM for category and price selection...'})
+        push_event(self, 'PROGRESS', 'Consulting LLM for category and price selection...', user_id)
     
     llm_results = query_gemini(
         user_query=user_query_str,
@@ -192,11 +224,43 @@ def perform_search(self, user_query_str: str):
             price_min=price_min,
             price_max=price_max,
             query_embedding=query_embedding,
-            limit=200
+            limit=200,
+            location=hard_location,
+            filter_terms=hard_filter_terms,
         )
     except Exception as exc:
         print(f"    [ERROR] Failed to fetch products: {exc}")
         return {"error": f"Database fetch error: {exc}"}
+
+    # Fallback Relaxer: If no products, relax hard filters one by one
+    if not product_docs:
+        print(f"\n[Fallback Relaxer] No products found with strict filters. Relaxing filters one by one...")
+        relaxations = [
+            {"location": None, "filter_terms": hard_filter_terms, "max_price": hard_max_price},
+            {"location": hard_location, "filter_terms": None, "max_price": hard_max_price},
+            {"location": hard_location, "filter_terms": hard_filter_terms, "max_price": None},
+        ]
+        for i, relaxed in enumerate(relaxations, 1):
+            relaxed_location = relaxed["location"]
+            relaxed_filter_terms = relaxed["filter_terms"]
+            relaxed_max_price = relaxed["max_price"]
+            # Adjust price_max if relaxing max_price
+            adjusted_price_max = price_max if relaxed_max_price is not None else None
+            try:
+                product_docs = getProductByCategory(
+                    selected_category_id,
+                    price_min=price_min,
+                    price_max=adjusted_price_max,
+                    query_embedding=query_embedding,
+                    limit=200,
+                    location=relaxed_location,
+                    filter_terms=relaxed_filter_terms,
+                )
+                if product_docs:
+                    print(f"    [Fallback Success] Found {len(product_docs)} products after relaxing filter set {i}")
+                    break
+            except Exception as exc:
+                print(f"    [Fallback Error] Failed during relaxation {i}: {exc}")
 
     if not product_docs and (price_min is not None or price_max is not None):
         print(f"\n[Fallback] No products found with price range. Retrying without price constraints...")
@@ -207,7 +271,9 @@ def perform_search(self, user_query_str: str):
                 price_min=None,
                 price_max=None,
                 query_embedding=query_embedding,
-                limit=200
+                limit=200,
+                location=hard_location,
+                filter_terms=hard_filter_terms,
             )
         except Exception as exc:
             print(f"    [ERROR] Failed to fetch products: {exc}")
@@ -225,7 +291,9 @@ def perform_search(self, user_query_str: str):
                         price_min=None,
                         price_max=None,
                         query_embedding=query_embedding,
-                        limit=200
+                        limit=200,
+                        location=hard_location,
+                        filter_terms=hard_filter_terms,
                     )
                     if product_docs:
                         print(f"    [Fallback Success] Found {len(product_docs)} products in category tree {fallback_cat_id}")
@@ -264,7 +332,7 @@ def perform_search(self, user_query_str: str):
     bm25_results = product_bm25.search(bm25_search_query, top_k=200)
 
     if self:
-        self.update_state(state='PROGRESS', meta={'status': 'Applying Reciprocal Rank Fusion (RRF) for final ranking...'})
+        push_event(self, 'PROGRESS', 'Applying Reciprocal Rank Fusion (RRF) for final ranking...', user_id)
 
     # Stage 4: Fusion using RRF
     print("\n[Hybrid Search] Applying Reciprocal Rank Fusion (RRF)...")
@@ -280,37 +348,106 @@ def perform_search(self, user_query_str: str):
         price = doc.get('price', 'N/A')
         print(f"  {i}. [RRF: {result['rrf_score']:.6f}] [BM25: {result['bm25_score']:.4f}] [Semantic Rank: {result['semantic_score']:.4f}] {doc['description'][:45]}... | Price: ${price}")
 
+    # Stage 8: Diversity Filter - Limit items from identical categories/sources
+    print("\n[Stage 8] Applying Diversity Filter...")
+    from collections import defaultdict
+    category_count: dict[str | None, int] = defaultdict(int)
+    max_per_category = 3  # Limit to 3 items per category to ensure diversity
+    diverse_results = []
+    for result in rrf_results:
+        category_id = result["document"].get("category_id")
+        if category_count[category_id] < max_per_category:
+            diverse_results.append(result)
+            category_count[category_id] += 1
+    rrf_results = diverse_results
+    print(f"  Diversity applied: {len(rrf_results)} results after filtering")
+
+    # Stage 9: Cross-Encoder Re-Ranking
+    print("\n[Stage 9] Cross-Encoder Re-Ranking...")
+    try:
+        from sentence_transformers import CrossEncoder  # type: ignore[import-not-found]
+        cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        
+        # Prepare query-document pairs for cross-encoder
+        query_doc_pairs = []
+        for result in rrf_results[:20]:  # Re-rank top 20
+            doc = result["document"]
+            # Combine title/description for better context
+            doc_text = f"{doc.get('title', '')} {doc.get('description', '')}".strip()
+            query_doc_pairs.append([user_query_str, doc_text])
+        
+        if query_doc_pairs:
+            # Get cross-encoder scores
+            cross_scores = cross_encoder.predict(query_doc_pairs)
+            
+            # Re-rank based on cross-encoder scores
+            scored_results = []
+            for i, result in enumerate(rrf_results[:20]):
+                new_result = dict(result)
+                new_result["cross_score"] = float(cross_scores[i])
+                scored_results.append(new_result)
+            
+            # Sort by cross-encoder score (higher is better)
+            scored_results.sort(key=lambda x: x["cross_score"], reverse=True)
+            
+            # Update rrf_results with re-ranked order
+            rrf_results = scored_results + rrf_results[20:]
+            
+            print(f"  Cross-encoder re-ranking completed for top {len(scored_results)} results")
+        else:
+            print("  Cross-encoder: No query-doc pairs to score")
+            
+    except ImportError as e:
+        print(f"  Cross-encoder not available: {e}. Skipping re-ranking.")
+    except Exception as e:
+        print(f"  Cross-encoder error: {e}. Falling back to RRF order.")
+
     # ============================================================================
     # Caching Phase: Store Top 20, Return Top 5
     # ============================================================================
     if self:
-        self.update_state(state='PROGRESS', meta={'status': 'Caching top 20 results and finalizing...'})
+        push_event(self, 'PROGRESS', 'Caching top 20 results and finalizing...', user_id)
 
     top_20 = _sanitize_ranked_results(rrf_results[:20])
     top_5 = _sanitize_ranked_results(rrf_results[:5])
     top_5_documents = [result["document"] for result in top_5]
 
-    final_response = MarkdownDescription(top_5_documents).generate() if top_5_documents else ""
+    final_response = MarkdownDescription(top_5_documents, intent).generate() if top_5_documents else ""
 
     try:
-        import redis
+        from importlib import import_module
         import json
         import os
+        redis = import_module("redis")
         
         redis_host = os.getenv("REDIS_HOST", "localhost")
         redis_port = int(os.getenv("REDIS_PORT", "6379"))
-        # Using db=1 to keep cache separate from Celery broker (db=0)
-        r = redis.Redis(host=redis_host, port=redis_port, db=1) 
+        # Using db=0 to match Gateway cache/pubsub database
+        r = redis.Redis(host=redis_host, port=redis_port, db=0) 
         
         task_id = self.request.id if self and hasattr(self, 'request') and self.request.id else "local_test"
         cache_key = f"search_results:{task_id}"
         
         # Serialize with default=str to handle UUIDs, Decimals, or Datetimes effortlessly
         r.setex(cache_key, 3600, json.dumps(top_20, default=str)) 
+
+        # Semantic cache used by gateway to short-circuit repeated queries.
+        if semantic_cache_key:
+            semantic_payload = {
+                "results": top_20,
+                "final_response": final_response,
+            }
+            r.setex(semantic_cache_key, 3600, json.dumps(semantic_payload, default=str))
+
         print(f"\n[Cache] Stored top 20 results in Redis under key: {cache_key}")
     except Exception as e:
         print(f"\n[Cache Error] Failed to store results in Redis: {e}")
 
+    push_event(self, 'SUCCESS', 'Search Complete', user_id, extra_payload={'type': 'products', 'payload': {'items': top_5}})
+    if final_response:
+        push_event(self, 'SUCCESS', 'Search Complete', user_id, extra_payload={'type': 'chunk', 'payload': {'content': final_response}})
+    push_event(self, 'SUCCESS', 'Search Complete', user_id, extra_payload={'type': 'end'})
+    
     return {
         "results": top_5,
         "final_response": final_response,

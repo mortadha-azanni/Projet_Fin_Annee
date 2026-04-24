@@ -1,4 +1,6 @@
-import asyncpg
+from typing import AsyncGenerator
+
+import asyncpg  # type: ignore[import-untyped]
 from .config import settings
 
 # Pool is stored on the module so main.py can reference it in lifespan
@@ -14,7 +16,7 @@ async def create_pool() -> asyncpg.Pool:
         database=settings.DB_NAME,
         user=settings.DB_USER,
         password=settings.DB_PASSWORD,
-        ssl=settings.DB_SSL,
+        ssl=settings.db_ssl_effective,
         min_size=2,
         max_size=10,
     )
@@ -29,7 +31,7 @@ async def close_pool() -> None:
         _pool = None
 
 
-async def get_db() -> asyncpg.Connection:
+async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
     """FastAPI dependency — acquires a connection from the pool."""
     if _pool is None:
         raise RuntimeError("Database pool is not initialised")

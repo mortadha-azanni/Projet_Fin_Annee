@@ -44,7 +44,7 @@ API Gateway service that handles authentication, caching, and orchestrates reque
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| WS | `/websocket_progress` | Proxies scraper progress to admin |
+| WS | `/scrape/progress` | Proxies scraper progress to admin |
 | WS | `/ws/status/{task_id}` | Proxies ranker status to client |
 
 ## Environment Variables

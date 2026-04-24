@@ -3,21 +3,58 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
+import asyncio
 from core.database import create_pool, close_pool
+from core.redis_client import create_redis, close_redis
 from auth.router import router as auth_router
 from routers.users import router as users_router
 from routers.etl import router as etl_router
 from routers.search import router as search_router
 from routers.admin import router as admin_router
+from pubsub import start_pubsub_listener
+from core.security_middleware import SecurityMiddleware
 import httpx
 
 app = FastAPI(redirect_slashes=False)
 # ── Lifespan (startup / shutdown) ─────────────────────────────────────────────
 
+
+async def init_db_pool_with_retry(retries: int = 30, delay_seconds: float = 5.0) -> None:
+    for attempt in range(1, retries + 1):
+        try:
+            await create_pool()
+            print("[gateway] database pool connected")
+            return
+        except Exception as exc:
+            print(f"[gateway] database pool init failed (attempt {attempt}/{retries}): {exc}")
+            if attempt < retries:
+                await asyncio.sleep(delay_seconds)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await create_pool()
+    # Init DB and Redis pools
+    db_init_task = asyncio.create_task(init_db_pool_with_retry())
+    await create_redis()
+    
+    # Start Pub/Sub listener
+    pubsub_task = asyncio.create_task(start_pubsub_listener())
+    
     yield
+    
+    # Graceful shutdown
+    db_init_task.cancel()
+    try:
+        await db_init_task
+    except asyncio.CancelledError:
+        pass
+
+    pubsub_task.cancel()
+    try:
+        await pubsub_task
+    except asyncio.CancelledError:
+        pass
+        
+    await close_redis()
     await close_pool()
 
 
@@ -41,6 +78,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Security Middleware ────────────────────────────────────────────────────────
+app.add_middleware(SecurityMiddleware)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
@@ -86,9 +126,3 @@ async def check_services_health():
 async def legacy_proxy_websocket_progress(websocket: WebSocket):
     from routers.etl import proxy_websocket_progress
     await proxy_websocket_progress(websocket)
-
-
-@app.websocket("/ws/status/{task_id}")
-async def legacy_status_websocket(websocket: WebSocket, task_id: str):
-    from routers.search import status_websocket
-    await status_websocket(websocket, task_id)

@@ -7,6 +7,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from enum import Enum
 from scraper import runScrapers
+from src.core.control import (
+    SCRAPER_CONTROL_STATE_KEY,
+    SCRAPER_PROGRESS_CHANNEL,
+    SCRAPER_TASK_ID_KEY,
+)
 import redis.asyncio as redis  #type: ignore
 from src.database.session import getProductsCount
 
@@ -28,13 +33,20 @@ async def redis_listener():
     """Background task to listen for progress updates from Celery via Redis Pub/Sub"""
     r = redis.from_url(redis_url)
     pubsub = r.pubsub()
-    await pubsub.subscribe("scraper_progress")
+    await pubsub.subscribe(SCRAPER_PROGRESS_CHANNEL)
     try:
         async for message in pubsub.listen():
             if message["type"] == "message":
                 data = json.loads(message["data"])
-                # Update local global state
-                apply_server_state(data)
+                update_scraping_status(
+                    state=data.get("state", scraping_status["state"]),
+                    message=data.get("message", scraping_status["message"]),
+                    urls_scraped=data.get("urls_scraped", scraping_status["urls_scraped"]),
+                    last_sync=data.get("last_sync", scraping_status["last_sync"]),
+                    total_records=data.get("total_records", scraping_status["total_records"]),
+                    index_latency_ms=data.get("index_latency_ms", scraping_status["index_latency_ms"]),
+                    pipeline_health=data.get("pipeline_health", scraping_status["pipeline_health"]),
+                )
                 # Broadcast to connected WS clients
                 await broadcast_progress(scraping_status)
     except asyncio.CancelledError:
@@ -80,15 +92,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-#Track scraping state
-scraping_status={
+# Track scraping state
+scraping_status = {
     "state": "idle",
     "message": "Scraping is idle",
-    "urls_scraped": 0
+    "urls_scraped": 0,
+    "last_sync": None,
+    "total_records": 0,
+    "index_latency_ms": None,
+    "pipeline_health": "Healthy",
 }
 
-#WebSocket clients
-active_connections : list[WebSocket] = []
+# WebSocket clients
+active_connections: list[WebSocket] = []
 
 class ScrapingState(str, Enum):
     IDLE = "idle"
@@ -98,16 +114,12 @@ class ScrapingState(str, Enum):
     COMPLETED = "completed"
     ERROR = "error"
 
+# WebSocket helper --------------------------------
+def update_scraping_status(**updates) -> None:
+    scraping_status.update(updates)
 
 
-@app.get("/")
-async def root():
-    return {
-        "service": "scraper-node",
-        "status": "running"
-    }
-
-#WebSocket helper --------------------------------
+# WebSocket helper --------------------------------
 async def broadcast_progress(message: dict):
     stale_connections = []
     for connection in active_connections:
@@ -123,7 +135,7 @@ async def broadcast_progress(message: dict):
 #WebSocket Endpoint --------------------------------
 @app.websocket("/websocket_progress")
 async def websocket_progress(websocket: WebSocket):
-    """Admin connects here to receivereal time scraping progress updates"""
+    """Admin connects here to receive real time scraping progress updates"""
     await websocket.accept()
     active_connections.append(websocket)
     
@@ -136,7 +148,13 @@ async def websocket_progress(websocket: WebSocket):
     except WebSocketDisconnect:
         active_connections.remove(websocket)
 
-#Basic endpoints --------------------------------
+# Basic endpoints --------------------------------
+@app.get("/")
+async def root():
+    return {
+        "service": "scraper-node",
+        "status": "running"
+    }
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
@@ -149,14 +167,17 @@ async def launch_scraping():
     if scraping_status["state"] == ScrapingState.RUNNING:
         return {"state": "error", "message": "Scraping is already running"}
     
-    scraping_status["state"] = ScrapingState.RUNNING
-    scraping_status["message"] = "Scraping started - queueing background task"
-    scraping_status["urls_scraped"] = 0
+    update_scraping_status(
+        state=ScrapingState.RUNNING,
+        message="Scraping started - queueing background task",
+        urls_scraped=0,
+        pipeline_health="Running",
+    )
 
     await broadcast_progress(scraping_status)
     
     # Launch Celery background task
-    await r_client.set("scraper_control_state", "running")
+    await r_client.set(SCRAPER_CONTROL_STATE_KEY, "running")
     task = runScrapers.delay()
     logger.info("Scraping launched manually, task_id=%s", task.id)
     await r_client.set("current_scraper_task_id", task.id)
@@ -169,10 +190,13 @@ async def pause_scraping():
         return {"state": "error", "message": "No scraping process is currently running"}
     
     # Let background tasks know it should sleep loops
-    await r_client.set("scraper_control_state", "paused")
+    await r_client.set(SCRAPER_CONTROL_STATE_KEY, "paused")
     
-    scraping_status["state"] = ScrapingState.PAUSED
-    scraping_status["message"] = "Scraping paused by admin"
+    update_scraping_status(
+        state=ScrapingState.PAUSED,
+        message="Scraping paused by admin",
+        pipeline_health="Paused",
+    )
 
     await broadcast_progress(scraping_status)
     return {"state": "paused", "message": "Scraping paused successfully"}
@@ -183,10 +207,13 @@ async def resume_scraping():
         return {"state": "error", "message": "Scraping is not currently paused"}
     
     # Wake up background tasks
-    await r_client.set("scraper_control_state", "running")
+    await r_client.set(SCRAPER_CONTROL_STATE_KEY, "running")
     
-    scraping_status["state"] = ScrapingState.RUNNING
-    scraping_status["message"] = "Scraping resumed by admin"
+    update_scraping_status(
+        state=ScrapingState.RUNNING,
+        message="Scraping resumed by admin",
+        pipeline_health="Running",
+    )
 
     await broadcast_progress(scraping_status)
     return {"state": "running", "message": "Scraping resumed successfully"}
@@ -196,16 +223,19 @@ async def stop_scraping():
     if scraping_status["state"] not in [ScrapingState.RUNNING, ScrapingState.PAUSED]:
         return {"state": "error", "message": "No scraping process is currently running or paused"}
     
-    await r_client.set("scraper_control_state", "stopped")
+    await r_client.set(SCRAPER_CONTROL_STATE_KEY, "stopped")
     
     # Optional: Hard revoke from celery just in case it's ignoring loops
-    task_id = await r_client.get("current_scraper_task_id")
+    task_id = await r_client.get(SCRAPER_TASK_ID_KEY)
     if task_id:
         from celery_app import app as celery_app
         celery_app.control.revoke(task_id, terminate=True)
     
-    scraping_status["state"] = ScrapingState.IDLE
-    scraping_status["message"] = "Scraping stopped by admin"
+    update_scraping_status(
+        state=ScrapingState.IDLE,
+        message="Scraping stopped by admin",
+        pipeline_health="Stopped",
+    )
     
     await broadcast_progress(scraping_status)
     return {"state": "idle", "message": "Scraping stopped successfully"}

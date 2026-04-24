@@ -1,15 +1,19 @@
-from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query, BackgroundTasks
 from pydantic import BaseModel
 import httpx
-import websockets
 import json
 import uuid
 import asyncio
 import re
-from typing import Optional, Any
+import hashlib, Any
 from core.config import settings
-from auth.dependencies import get_current_user, get_ws_user
+from auth.dependencies import get_current_user
 from auth.models import TokenData
+from ws_manager import manager  # Added WS Connection Manager
+from services.session_manager import session_manager
+from services.classifier import classify_intent
+from core.redis_client import get_redis
+from core.sanitization import SanitizedSearchQuery, SanitizedConstraints, SanitizedEntities, validate_and_sanitize_input
 
 router = APIRouter()
 
@@ -171,28 +175,112 @@ async def llm_chat_reply(message: str) -> str | None:
 @router.post("/search")
 async def search(
     query_data: SearchQuery,
+    background_tasks: BackgroundTasks,
     current_user: TokenData = Depends(get_current_user),
 ):
     """
     POST /search — Contract §2, Step 1.
-    Forwards the query to the ranker service and returns the real task_id
-    that the frontend will use to connect to the WebSocket stream.
+    Classify intent first. Forward to ranker OR reply directly via WS stream.
     """
+    # Sanitize and validate input
+    try:
+        sanitized_query = SanitizedSearchQuery(query=query_data.query)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid search query: {str(e)}"
+        )
+
+    user_id = str(current_user.id)
+    query_text = sanitized_query.query
+
+    # 1. Load recent history
+    history = await session_manager.get_context(user_id)
+    
+    # 2. Log user message permanently into current session buffer
+    await session_manager.add_turn(user_id, "user", query_text)
+    
+    # 3. Classify intent securely using Gemini (Stage 4)
+    decision = await classify_intent(query_text, history)
+    intent = decision.get("intent", "search")
+    
+    task_id = str(uuid.uuid4())
+    
+    # 4. Route Execution
+    if intent in ("chitchat", "clarify", "ambiguous"):
+        # Fire background task for immediate reply
+        reply = decision.get("direct_reply") or decision.get("clarification_question") or "Can you clarify that?"
+        background_tasks.add_task(send_direct_reply, user_id, task_id, reply)
+        return {
+            "task_id": task_id,
+            "status": "Generating response...",
+            "intent": intent
+        }
+    
+    # Otherwise, it's a Search or Constrained -> Forward to Ranker
+    constraints = decision.get("constraints", {})
+    entities = decision.get("entities", {})
+
+    # Sanitize constraints and entities
+    try:
+        sanitized_constraints = (
+            SanitizedConstraints(**constraints)
+            if constraints
+            else SanitizedConstraints(max_price=None, location=None, filters=None)
+        )
+        sanitized_entities = (
+            SanitizedEntities(**entities)
+            if entities
+            else SanitizedEntities(products=None, brands=None, categories=None, dates=None)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid search constraints: {str(e)}"
+        )
+
+    constraints_dict = sanitized_constraints.dict(exclude_unset=True) if sanitized_constraints else {}
+    entities_dict = sanitized_entities.dict(exclude_unset=True) if sanitized_entities else {}
+
+    semantic_cache_key = _semantic_cache_key(query_text, constraints_dict)
+
+    redis_conn = get_redis()
+    cached_payload = await redis_conn.get(semantic_cache_key)
+    if cached_payload:
+        try:
+            parsed_cache = json.loads(cached_payload)
+            if isinstance(parsed_cache, list):
+                parsed_cache = {"results": parsed_cache, "final_response": "Here are cached results for your request."}
+            background_tasks.add_task(send_cached_reply, user_id, task_id, parsed_cache)
+            return {
+                "task_id": task_id,
+                "status": "Returning cached response...",
+                "intent": intent,
+                "cache_hit": True,
+            }
+        except Exception:
+            # Cache payload malformed, continue with normal ranker path.
+            pass
+    
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{settings.RANKER_URL}/search",
                 json={
-                    "query": query_data.query,
-                    "user_id": current_user.id,
+                    "query": query_text,
+                    "user_id": user_id,
+                    "intent": intent,
+                    "constraints": constraints_dict,
+                    "entities": entities_dict,
+                    "semantic_cache_key": semantic_cache_key,
                 },
             )
             response.raise_for_status()
             data = response.json()
-            # Ranker must return {"task_id": "...", "status": "..."}
             return {
-                "task_id": data.get("task_id", str(uuid.uuid4())),
+                "task_id": data.get("task_id", task_id),
                 "status": data.get("status", "Processing..."),
+                "intent": intent
             }
     except httpx.HTTPStatusError as e:
         raise HTTPException(
@@ -248,7 +336,6 @@ async def status_websocket(
     """
     # Validate token before accepting the WS upgrade
     try:
-        get_ws_user.__wrapped__ if hasattr(get_ws_user, "__wrapped__") else None
         from core.security import decode_token
         token_data = decode_token(token)
         if token_data.role not in ("user", "admin"):
@@ -258,110 +345,26 @@ async def status_websocket(
         await websocket.close(code=4001)
         return
 
-    await websocket.accept()
+    await manager.connect(str(token_data.id), task_id, websocket)
 
     message_id = str(uuid.uuid4())
 
     # Send 'start' event — signals the frontend to create the assistant message
-    await websocket.send_json({
-        "type": "start",
-        "payload": {"message_id": message_id},
-    })
-
-    ranker_ws_uri = f"{settings.ranker_ws_url}/ws/status/{task_id}"
-
     try:
-        async with websockets.connect(ranker_ws_uri) as ranker_ws:
-            while True:
-                message = await ranker_ws.recv()
-                try:
-                    data = json.loads(message)
-                except json.JSONDecodeError:
-                    # Non-JSON from ranker — treat as a plain text chunk
-                    await websocket.send_json({
-                        "type": "chunk",
-                        "payload": {"message_id": message_id, "content": message},
-                    })
-                    continue
+        await websocket.send_json({
+            "type": "start",
+            "payload": {"message_id": message_id},
+        })
 
-                event_type = data.get("type")
-                state = data.get("state")
-
-                if event_type == "chunk":
-                    await websocket.send_json({
-                        "type": "chunk",
-                        "payload": {
-                            "message_id": message_id,
-                            "content": data.get("content") or data.get("text", ""),
-                        },
-                    })
-                elif state in ("PROGRESS", "PENDING") or event_type == "status":
-                    status_text = data.get("status") or data.get("message") or "Processing..."
-                    await websocket.send_json({
-                        "type": "status",
-                        "payload": {
-                            "message_id": message_id,
-                            "status": status_text,
-                        },
-                    })
-                elif event_type == "products":
-                    await websocket.send_json({
-                        "type": "products",
-                        "payload": {
-                            "message_id": message_id,
-                            "items": data.get("items") or data.get("data", []),
-                        },
-                    })
-
-                elif state == "SUCCESS":
-                    if data.get("results"):
-                        await websocket.send_json({
-                            "type": "products",
-                            "payload": {
-                                "message_id": message_id,
-                                "items": data.get("results"),
-                            },
-                        })
-                    if data.get("final_response"):
-                        await websocket.send_json({
-                            "type": "chunk",
-                            "payload": {
-                                "message_id": message_id,
-                                "content": data.get("final_response"),
-                            },
-                        })
-                    await websocket.send_json({
-                        "type": "end",
-                        "payload": {"message_id": message_id},
-                    })
-                    break
-
-                elif event_type == "end":
-                    await websocket.send_json({
-                        "type": "end",
-                        "payload": {"message_id": message_id},
-                    })
-                    break
-
-                elif event_type == "error" or state == "FAILURE":
-                    await websocket.send_json({
-                        "type": "error",
-                        "payload": {
-                            "message": data.get("message") or data.get("error", "Search failed"),
-                        },
-                    })
-                    break
-
-    except websockets.exceptions.ConnectionClosed:
-        # Ranker closed the connection — signal end to client
-        try:
-            await websocket.send_json({
-                "type": "end",
-                "payload": {"message_id": message_id},
-            })
-        except Exception:
-            pass
-
+        # Keep the connection open indefinitely.
+        # The background Pub/Sub listener will push events automatically.
+        while True:
+            # We don't expect the client to send us text here, but we listen to detect disconnects.
+            _ = await websocket.receive_text()
+            
+    except WebSocketDisconnect:
+        # Client gracefully closed WS
+        pass
     except Exception as exc:
         try:
             await websocket.send_json({
@@ -370,8 +373,8 @@ async def status_websocket(
             })
         except Exception:
             pass
-
     finally:
+        manager.disconnect(str(token_data.id), task_id, websocket)
         try:
             await websocket.close()
         except Exception:

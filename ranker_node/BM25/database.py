@@ -31,7 +31,7 @@ def getCategories():
         categories = [dict(row._mapping) for row in result.fetchall()]
     return categories
 
-def getProductByCategory(category_id, price_min=None, price_max=None, query_embedding=None, limit=200):
+def getProductByCategory(category_id, price_min=None, price_max=None, query_embedding=None, limit=200, location=None, filter_terms=None):
     """
     Fetch products for a given category from PostgreSQL.
     
@@ -41,6 +41,8 @@ def getProductByCategory(category_id, price_min=None, price_max=None, query_embe
         price_max: Maximum price filter (optional)
         query_embedding: Numpy array or list representing the query embedding for pgvector cosine distance sorting
         limit: Max number of products to return
+        location: Optional hard location filter string
+        filter_terms: Optional list of hard filter tokens (brand/model/category keywords)
     """
     with engine.connect() as conn:
         query = (
@@ -57,6 +59,16 @@ def getProductByCategory(category_id, price_min=None, price_max=None, query_embe
         if price_max is not None:
             query += " AND price <= :price_max"
             params["price_max"] = price_max
+
+        if location:
+            query += " AND (description ILIKE :location OR dictionary ILIKE :location)"
+            params["location"] = f"%{location}%"
+
+        if filter_terms:
+            for idx, term in enumerate(filter_terms):
+                param_key = f"filter_term_{idx}"
+                query += f" AND (description ILIKE :{param_key} OR dictionary ILIKE :{param_key})"
+                params[param_key] = f"%{term}%"
             
         if query_embedding is not None:
             # Cast python list to pgvector literal string representation e.g., '[0.1, 0.2, ...]'

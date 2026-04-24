@@ -73,8 +73,13 @@ Return valid JSON:
 }}
 """
 
-def query_gemini(user_query: str, ner_entities: List[str], category_dictionaries: Optional[List[str]] = None, price_constraints: Optional[str] = None) -> Dict:
-    prompt = default_prompt.format(user_query=user_query, ner_entities=", ".join(ner_entities) if ner_entities else "", category_dictionaries="\n".join(category_dictionaries) if category_dictionaries else "", price_constraints=", ".join(price_constraints) if price_constraints else "")
+def query_gemini(user_query: str, ner_entities: List[str], category_dictionaries: Optional[List[str]] = None, price_constraints: Optional[List[str]] = None) -> Dict:
+    prompt = default_prompt.format(
+        user_query=user_query, 
+        ner_entities=", ".join(ner_entities) if ner_entities else "", 
+        category_dictionaries="\n".join(category_dictionaries) if category_dictionaries else "", 
+        price_constraints=", ".join(price_constraints) if isinstance(price_constraints, list) else (price_constraints or "")
+    )
 
     try:
         import time

@@ -1,0 +1,61 @@
+cubes:
+  - name: Products
+    sql_table: products
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+
+      - name: name
+        sql: name
+        type: string
+
+      - name: price
+        sql: price
+        type: number
+
+      - name: urllink
+        sql: urllink
+        type: string
+
+      - name: source
+        sql: >
+          CASE
+            WHEN {CUBE}.urllink LIKE '%mytek.tn%' THEN 'Mytek'
+            WHEN {CUBE}.urllink LIKE '%tunisianet.com.tn%' THEN 'Tunisianet'
+            ELSE 'Unknown'
+          END
+        type: string
+
+      - name: category_id
+        sql: category_id
+        type: string
+
+    measures:
+      - name: count
+        type: count
+
+      - name: avg_price
+        sql: price
+        type: avg
+        filters:
+          - sql: "{CUBE}.price > 1"
+
+      - name: min_price
+        sql: price
+        type: min
+        filters:
+          - sql: "{CUBE}.price > 1"
+
+      - name: max_price
+        sql: price
+        type: max
+        filters:
+          - sql: "{CUBE}.price > 1"
+
+    joins:
+      - name: Categories
+        sql: "{CUBE}.category_id = {Categories}.id"
+        relationship: many_to_one

@@ -1,0 +1,7 @@
+views:
+  - name: UserGrowth
+    cubes:
+      - join_path: Users
+        includes:
+          - count
+          - created_at

@@ -1,0 +1,9 @@
+views:
+  - name: PriceAnalysis
+    cubes:
+      - join_path: PriceRollup
+        includes:
+          - name
+          - avg_price
+          - min_price
+          - max_price

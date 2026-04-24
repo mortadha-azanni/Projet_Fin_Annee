@@ -1,0 +1,28 @@
+cubes:
+  - name: CategoryRollup
+    sql: >
+      SELECT
+        COALESCE(parent.id, c.id) AS top_level_id,
+        COALESCE(parent.name, c.name) AS top_level_name,
+        COUNT(p.id) AS product_count
+      FROM products p
+      JOIN categories c ON p.category_id = c.id
+      LEFT JOIN categories parent ON c.parent_id = parent.id
+      GROUP BY
+        COALESCE(parent.id, c.id),
+        COALESCE(parent.name, c.name)
+
+    dimensions:
+      - name: id
+        sql: top_level_id
+        type: string
+        primary_key: true
+
+      - name: name
+        sql: top_level_name
+        type: string
+
+    measures:
+      - name: total_product_count
+        sql: product_count
+        type: sum

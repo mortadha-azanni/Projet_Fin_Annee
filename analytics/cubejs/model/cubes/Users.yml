@@ -1,0 +1,37 @@
+cubes:
+  - name: Users
+    sql_table: users
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+
+      - name: email
+        sql: email
+        type: string
+
+      - name: full_name
+        sql: full_name
+        type: string
+
+      - name: avatar_url
+        sql: avatar_url
+        type: string
+
+      - name: email_verified
+        sql: "CASE WHEN email_verified = true THEN 'Verified' ELSE 'Unverified' END"
+        type: string
+
+      - name: google_id
+        sql: google_id
+        type: string
+
+      - name: created_at
+        sql: created_at
+        type: time
+
+    measures:
+      - name: count
+        type: count

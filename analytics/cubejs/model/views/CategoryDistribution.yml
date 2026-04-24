@@ -1,0 +1,7 @@
+views:
+  - name: CategoryDistribution
+    cubes:
+      - join_path: CategoryRollup
+        includes:
+          - name
+          - total_product_count

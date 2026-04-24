@@ -1,0 +1,39 @@
+cubes:
+  - name: PriceRollup
+    sql: >
+      SELECT
+        COALESCE(parent.id, c.id) AS top_level_id,
+        COALESCE(parent.name, c.name) AS top_level_name,
+        AVG(p.price) FILTER (WHERE p.price > 1) AS avg_price,
+        MIN(p.price) FILTER (WHERE p.price > 1) AS min_price,
+        MAX(p.price) FILTER (WHERE p.price > 1) AS max_price
+      FROM products p
+      JOIN categories c ON p.category_id = c.id
+      LEFT JOIN categories parent ON c.parent_id = parent.id
+      WHERE p.price > 1
+      GROUP BY
+        COALESCE(parent.id, c.id),
+        COALESCE(parent.name, c.name)
+
+    dimensions:
+      - name: id
+        sql: top_level_id
+        type: string
+        primary_key: true
+
+      - name: name
+        sql: top_level_name
+        type: string
+
+    measures:
+      - name: avg_price
+        sql: avg_price
+        type: avg
+
+      - name: min_price
+        sql: min_price
+        type: min
+
+      - name: max_price
+        sql: max_price
+        type: max

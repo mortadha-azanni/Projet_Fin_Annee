@@ -1,0 +1,34 @@
+cubes:
+  - name: Categories
+    sql_table: categories
+
+    joins:
+      - name: Products
+        sql: "{CUBE}.id = {Products}.category_id"
+        relationship: one_to_many
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+
+      - name: name
+        sql: name
+        type: string
+
+      - name: parent_id
+        sql: parent_id
+        type: string
+
+      - name: is_top_level
+        sql: >
+          CASE
+            WHEN {CUBE}.parent_id IS NULL THEN 'Top Level'
+            ELSE 'Subcategory'
+          END
+        type: string
+
+    measures:
+      - name: count
+        type: count

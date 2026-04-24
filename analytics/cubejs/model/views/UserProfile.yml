@@ -1,0 +1,13 @@
+views:
+  - name: UserProfile
+    cubes:
+      - join_path: Users
+        includes:
+          - id
+          - email
+          - full_name
+          - avatar_url
+          - email_verified
+          - google_id
+          - created_at
+          - count

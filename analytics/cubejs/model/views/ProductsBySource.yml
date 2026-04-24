@@ -1,0 +1,8 @@
+views:
+  - name: ProductsBySource
+    cubes:
+      - join_path: Products
+        includes:
+          - count
+          - source
+          - name
